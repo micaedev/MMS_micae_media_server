@@ -91,6 +91,7 @@ curl -s http://localhost:8080/api/health
 
 | Sorun | Çözüm |
 |-------|--------|
+| LAN’dan RTSP timeout | Sunucu IP’sini doğrulayın: `hostname -I` (ör. **192.168.0.90**, .100 değil). `.env` → `MTX_PUBLIC_HOST` aynı IP; `docker compose up -d --force-recreate mediamtx api web` |
 | Web arayüzde görüntü yok | **Tarayıcıda izle** (HLS 8888). `docker compose up --build -d` + sync zorunlu |
 | WebRTC “peer connection closed” | Yerelde STUN kapalı; HLS kullanın veya `webrtcAdditionalHosts` + UDP 8189 |
 | WebRTC bağlanmıyor | `MTX_PUBLIC_HOST` gerçek LAN IP; UDP **8189** / TCP **8190** açık |
