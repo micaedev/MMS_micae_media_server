@@ -1,0 +1,176 @@
+:root {
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  line-height: 1.5;
+  color: #e8eaed;
+  background: #0f1117;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+#root {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 2rem 1.25rem 3rem;
+}
+
+h1 {
+  font-size: 1.75rem;
+  margin: 0 0 0.25rem;
+}
+
+.subtitle {
+  color: #9aa0a6;
+  margin: 0 0 2rem;
+}
+
+.card {
+  background: #1a1d27;
+  border: 1px solid #2d3142;
+  border-radius: 12px;
+  padding: 1.25rem;
+  margin-bottom: 1.5rem;
+}
+
+.dropzone {
+  border: 2px dashed #4a5068;
+  border-radius: 10px;
+  padding: 2.5rem 1rem;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.dropzone:hover,
+.dropzone.dragover {
+  border-color: #6c9eff;
+  background: #151822;
+}
+
+.dropzone input {
+  display: none;
+}
+
+.progress {
+  margin-top: 1rem;
+  height: 8px;
+  background: #2d3142;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.progress-bar {
+  height: 100%;
+  background: #6c9eff;
+  transition: width 0.2s;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 0.65rem 0.5rem;
+  border-bottom: 1px solid #2d3142;
+}
+
+th {
+  color: #9aa0a6;
+  font-weight: 500;
+}
+
+.badge {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.badge-idle {
+  background: #2d3142;
+  color: #c4c7ce;
+}
+
+.badge-ready {
+  background: #1e3a2f;
+  color: #7dcea0;
+}
+
+.badge-streaming {
+  background: #2a1f3d;
+  color: #bb86fc;
+}
+
+.btn {
+  border: none;
+  border-radius: 8px;
+  padding: 0.4rem 0.75rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+  margin-right: 0.35rem;
+}
+
+.btn-primary {
+  background: #6c9eff;
+  color: #0f1117;
+}
+
+.btn-danger {
+  background: #5c2b2b;
+  color: #f8b4b4;
+}
+
+.btn-ghost {
+  background: #2d3142;
+  color: #e8eaed;
+}
+
+.url-row {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  margin-top: 0.35rem;
+}
+
+.url-row code {
+  font-size: 0.75rem;
+  background: #0f1117;
+  padding: 0.2rem 0.4rem;
+  border-radius: 4px;
+  word-break: break-all;
+}
+
+.help {
+  color: #9aa0a6;
+  font-size: 0.85rem;
+  margin-top: 0.5rem;
+}
+
+.error {
+  color: #f28b82;
+  margin-top: 0.75rem;
+}
+
+.preview video {
+  width: 100%;
+  max-height: 280px;
+  border-radius: 8px;
+  background: #000;
+}
+
+.empty {
+  color: #9aa0a6;
+  text-align: center;
+  padding: 2rem;
+}

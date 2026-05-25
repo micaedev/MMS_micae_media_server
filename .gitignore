@@ -1,0 +1,11 @@
+.env
+data/videos/*
+!data/videos/.gitkeep
+backend/data/*.db
+backend/__pycache__/
+backend/.venv/
+frontend/node_modules/
+frontend/dist/
+*.pyc
+.DS_Store
+mediamtx/mediamtx

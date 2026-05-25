@@ -1,0 +1,43 @@
+logLevel: info
+
+api: true
+apiAddress: :9997
+apiAllowOrigins: ["*"]
+
+rtsp: true
+rtspAddress: :8554
+
+webrtc: true
+webrtcAddress: :8889
+webrtcAllowOrigins: ["*"]
+# Yerel/LAN: sabit UDP/TCP port; STUN kapalı (localhost'ta peer connection kapanmasını önler)
+webrtcLocalUDPAddress: 127.0.0.1:8189
+webrtcLocalTCPAddress: 127.0.0.1:8190
+webrtcIPsFromInterfaces: true
+webrtcAdditionalHosts:
+  - 127.0.0.1
+  - localhost
+  - __WEBRTC_HOST__
+webrtcICEServers2: []
+
+hls: true
+hlsAddress: :8888
+hlsAllowOrigins: ["*"]
+
+authMethod: internal
+authInternalUsers:
+  - user: any
+    pass:
+    ips: []
+    permissions:
+      - action: publish
+      - action: read
+      - action: playback
+      - action: api
+      - action: metrics
+      - action: pprof
+
+pathDefaults:
+  runOnInitRestart: true
+
+paths: {}

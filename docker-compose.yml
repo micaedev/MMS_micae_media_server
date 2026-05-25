@@ -1,0 +1,52 @@
+services:
+  # WebRTC UDP/ICE için host ağı (Docker NAT sorununu giderir)
+  mediamtx:
+    build: ./mediamtx
+    network_mode: host
+    environment:
+      MTX_PUBLIC_HOST: ${MTX_PUBLIC_HOST:-127.0.0.1}
+    volumes:
+      - ./data/videos:/videos
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9997/v3/config/global/get"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  api:
+    build: ./backend
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      MTX_API_URL: http://host.docker.internal:9997
+      MTX_RTSP_URL: rtsp://host.docker.internal:8554
+      VIDEOS_DIR: /videos
+      PUBLIC_HOST: ${MTX_PUBLIC_HOST:-127.0.0.1}
+      WEBRTC_PORT: "8889"
+      HLS_PORT: "8888"
+      MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-53687091200}
+      DATABASE_URL: sqlite:////data/app.db
+    volumes:
+      - ./data/videos:/videos
+      - api-data:/data
+    ports:
+      - "8080:8080"
+    depends_on:
+      mediamtx:
+        condition: service_healthy
+    restart: unless-stopped
+
+  web:
+    build: ./frontend
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "3000:80"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  api-data:
