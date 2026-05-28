@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Video } from "./api";
-import { deleteVideo, fetchVideos, uploadVideo } from "./api";
+import {
+  deleteVideo,
+  fetchVideos,
+  restartAllStreams,
+  restartStream,
+  uploadVideo,
+} from "./api";
 import BrowserPreview from "./BrowserPreview";
 import { watchPageUrl } from "./whep";
 
@@ -45,6 +51,8 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [previewId, setPreviewId] = useState<string | null>(null);
+  const [restartingId, setRestartingId] = useState<string | null>(null);
+  const [restartingAll, setRestartingAll] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
@@ -108,6 +116,34 @@ export default function App() {
     }
   };
 
+  const onRestart = async (id: string) => {
+    try {
+      setError(null);
+      setRestartingId(id);
+      await restartStream(id);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Yayin yeniden baslatilamadi");
+    } finally {
+      setRestartingId(null);
+    }
+  };
+
+  const onRestartAll = async () => {
+    try {
+      setError(null);
+      setRestartingAll(true);
+      await restartAllStreams();
+      await load();
+    } catch (e) {
+      setError(
+        e instanceof Error ? e.message : "Tum yayinlar yeniden baslatilamadi",
+      );
+    } finally {
+      setRestartingAll(false);
+    }
+  };
+
   const previewVideo = videos.find((v) => v.id === previewId);
 
   return (
@@ -158,7 +194,26 @@ export default function App() {
       </section>
 
       <section className="card">
-        <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Videolarım</h2>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: "0.75rem",
+          }}
+        >
+          <h2 style={{ marginTop: 0, fontSize: "1.1rem", marginBottom: 0 }}>
+            Videolarım
+          </h2>
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={() => void onRestartAll()}
+            disabled={restartingAll || loading || videos.length === 0}
+          >
+            {restartingAll ? "Tumu yeniden baslatiliyor..." : "Tumunu yeniden baslat"}
+          </button>
+        </div>
         {loading ? (
           <p className="empty">Yükleniyor…</p>
         ) : videos.length === 0 ? (
@@ -195,6 +250,14 @@ export default function App() {
                       }
                     >
                       Tarayıcıda izle
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-ghost"
+                      onClick={() => void onRestart(v.id)}
+                      disabled={restartingId === v.id || restartingAll}
+                    >
+                      {restartingId === v.id ? "Yeniden baslatiliyor..." : "Yeniden baslat"}
                     </button>
                     <button
                       type="button"

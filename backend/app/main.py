@@ -151,6 +151,16 @@ async def sync_all_paths(db: Session = Depends(get_db)):
     return {"synced": synced, "note": "Path'ler runOnInit ile yeniden oluşturuldu"}
 
 
+@app.post("/api/videos/restart-all")
+async def restart_all_streams(db: Session = Depends(get_db)):
+    videos = db.query(models.Video).all()
+    restarted = 0
+    for video in videos:
+        await mtx.reload_path(video.mtx_path, f"/videos/{video.filename}")
+        restarted += 1
+    return {"restarted": restarted, "note": "Tum yayinlar yeniden baslatildi"}
+
+
 @app.post("/api/videos", response_model=VideoOut, status_code=201)
 async def upload_video(
     file: UploadFile = File(...),
@@ -213,6 +223,28 @@ async def upload_video(
     db.commit()
     db.refresh(video)
     return _to_video_out(video)
+
+
+@app.post("/api/videos/{video_id}/restart")
+async def restart_video_stream(video_id: str, db: Session = Depends(get_db)):
+    video = db.get(models.Video, video_id)
+    if not video:
+        raise HTTPException(404, "Video bulunamadi")
+
+    try:
+        await mtx.reload_path(video.mtx_path, f"/videos/{video.filename}")
+        st = await mtx.wake_publisher(video.mtx_path, timeout_sec=35.0)
+    except MediaMTXError as e:
+        raise HTTPException(502, str(e)) from e
+
+    reader_count = len(st["readers"])
+    return {
+        "id": video_id,
+        "status": _status_label(st["ready"], reader_count),
+        "ready": st["ready"],
+        "tracks": st.get("tracks", []),
+        "message": "Yayin yeniden baslatildi",
+    }
 
 
 @app.post("/api/videos/{video_id}/start")

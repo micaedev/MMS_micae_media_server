@@ -104,6 +104,22 @@ export async function startStream(id: string): Promise<StreamStart> {
   return res.json();
 }
 
+export async function restartStream(id: string): Promise<void> {
+  const res = await fetch(`/api/videos/${id}/restart`, { method: "POST" });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(parseApiError(body, "Yayin yeniden baslatilamadi"));
+  }
+}
+
+export async function restartAllStreams(): Promise<void> {
+  const res = await fetch("/api/videos/restart-all", { method: "POST" });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(parseApiError(body, "Tum yayinlar yeniden baslatilamadi"));
+  }
+}
+
 export async function deleteVideo(id: string): Promise<void> {
   const res = await fetch(`/api/videos/${id}`, { method: "DELETE" });
   if (!res.ok) {
