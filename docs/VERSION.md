@@ -103,11 +103,155 @@ Web panelinden video yükleyip LAN üzerinde **HLS** (tarayıcı), **RTSP** (VLC
 - Çok büyük dosyalarda ilk HLS manifest birkaç saniye–dakika gecikebilir.
 - Tek makine / tek disk (`data/videos`); çoklu disk veya dağıtık depolama yok.
 
+## v1.03 (2026-05-30) — çok ekran, disk gezgini, kayıt yeri sihirbazı
+
+**Depo:** [MMS_micae_media_server](https://github.com/micaedev/MMS_micae_media_server)  
+**Etiket:** `v1.03`
+
+### Özet
+
+Panel üç ana bölüme ayrıldı: **Ana sayfa**, **Kurulum**, **İzleme**. Video yükleme ve disk/klasör yönetimi yalnızca Kurulum’da; izleme ve HLS önizleme İzleme ekranında. Panelden takılı disklere klasör gezip yeni kayıt yeri oluşturulabilir; videolar seçilen PC yoluna yazılır.
+
+---
+
+### Arayüz ve gezinme (React Router)
+
+| Yol | Ekran | İşlev |
+|-----|--------|--------|
+| `/` | Ana sayfa (landing) | Kurulum veya İzleme’ye giriş kartları |
+| `/setup` | Kurulum | Kayıt yeri, video yükleme, kütüphane yönetimi (sil, başlat/durdur) |
+| `/watch` | İzleme | Video listesi, HLS önizleme, RTSP/HLS URL kopyalama, toplu yayın kontrolü |
+
+- Üst menü: **Ana sayfa · Kurulum · İzleme** (Kurulum ve İzleme sayfalarında).
+- `react-router-dom` eklendi; nginx `try_files` ile SPA yönlendirmesi (değişiklik yok).
+
+---
+
+### Çoklu disk ve kayıt yeri sihirbazı
+
+#### Kavramlar
+
+- **Kayıt yeri (storage volume):** Videoların yazıldığı klasör; yüklemede `storage_id` ile seçilir.
+- **Disk kökü (browse root):** Panelde gezilebilen üst düzey mount (`/media`, `/mnt`, …).
+- **Varsayılan:** `data/videos` → konteyner `/videos`, PC `./data/videos`.
+- **Özel kayıt yeri:** Kurulum sihirbazıyla oluşturulur; SQLite `storage_locations` tablosunda saklanır.
+
+#### Kurulum ekranı — Kayıt yeri bölümü
+
+1. Mevcut kayıt yerlerinden radyo ile seçim (tercih `localStorage`).
+2. **「+ Başka diskte yeni klasör oluştur」** sihirbazı:
+   - Disk/kök seçimi (`GET /api/storage/roots`)
+   - Klasör gezgini (`GET /api/storage/browse`) — alt klasörlere tıklayarak girme, ↑ Üst
+   - Yeni klasör adı + panel etiketi
+   - **Oluştur ve seç** → diskte klasör oluşturulur, kayıt yeri eklenir
+3. Özel kayıt yerleri **「Kayıt yerini kaldır」** ile silinebilir (üzerinde video yoksa; diskteki klasör kalır).
+4. Gösterim: **PC’de tam yol** + konteyner içi yol (ör. PC `/mnt/mediaserver-videos`, konteyner `/host/mnt/mediaserver-videos`).
+
+#### PC yolu vs konteyner yolu
+
+Docker bind mount eşlemesi:
+
+| PC (host) | Konteyner (api + engine) |
+|-----------|---------------------------|
+| `/media/...` | `/host/media/...` |
+| `/mnt/...` | `/host/mnt/...` |
+| `STORAGE_EXTRA_HOST_PATH` | `/host/extra/...` |
+
+`pc_path_for_container()` API yanıtlarında doğru PC yolunu hesaplar (önceki sürümde `/host/mnt/...` yanlış gösterilebiliyordu).
+
+---
+
+### Backend (FastAPI)
+
+#### Yeni / güncellenen modüller
+
+| Dosya | Açıklama |
+|-------|----------|
+| `app/storage.py` | Env birimleri, browse kökleri, güvenli yol çözümleme, klasör oluşturma |
+| `app/migrate.py` | `videos.storage_id`, `storage_locations` tablosu |
+| `app/models.py` | `StorageLocation` modeli |
+
+#### Yeni API uçları
+
+| Endpoint | Açıklama |
+|----------|----------|
+| `GET /api/storage/volumes` | Tüm kayıt yerleri (env + özel) |
+| `GET /api/storage/roots` | Gezilebilir disk kökleri |
+| `GET /api/storage/browse?root_id=&path=` | Klasör listesi |
+| `POST /api/storage/locations` | Yeni klasör + kayıt yeri (`root_id`, `browse_path`, `folder_name`, `label`) |
+| `DELETE /api/storage/locations/{id}` | Özel kayıt yeri sil (video yoksa) |
+
+#### Yükleme
+
+- `POST /api/videos` — `multipart`: `file` + `storage_id` (Form alanı).
+- Video kaydı `storage_id` ile DB’de tutulur; dosya yolu seçilen volume’a göre çözülür.
+- FFmpeg/MediaMTX path’i ilgili konteyner yolunu kullanır.
+
+---
+
+### Docker ve ortam değişkenleri
+
+#### `docker-compose.yml` mount’ları (api + engine)
+
+- `./data/videos` → `/videos`
+- `/media` → `/host/media`
+- `/mnt` → `/host/mnt`
+- `${STORAGE_EXTRA_HOST_PATH:-./data/.optional-extra}` → `/host/extra`
+
+#### Yeni / güncellenen değişkenler
+
+| Değişken | Açıklama |
+|----------|----------|
+| `STORAGE_VOLUMES` | Sabit kayıt yerleri: `id:konteyner:etiket\|pc_yolu` (`;` ile ayrılır) |
+| `STORAGE_BROWSE_ROOTS` | Gezinti kökleri: `id:konteyner:etiket\|pc_yolu` — **etiketten sonra `\|` ile PC yolu zorunlu** |
+| `STORAGE_EXTRA_HOST_PATH` | Ek disk host yolu (ör. `/media/micae/store`) |
+
+Örnek `.env` (mağaza diski):
+
+```env
+STORAGE_EXTRA_HOST_PATH=/media/micae/store
+STORAGE_BROWSE_ROOTS=media:/host/media:Media|/media;store:/host/extra:Mağaza|/media/micae/store
+```
+
+Değişiklikten sonra: `docker compose up -d --force-recreate api engine`
+
+---
+
+### Frontend dosya yapısı (yeni)
+
+```
+frontend/src/
+├── pages/LandingPage.tsx
+├── pages/SetupPage.tsx
+├── pages/WatchPage.tsx
+├── components/AppNav.tsx
+├── components/StorageLocationSetup.tsx
+├── components/StatusBadge.tsx
+├── hooks/useVideos.ts
+└── utils/format.ts
+```
+
+---
+
+### v1.02’den devralınan (değişmedi)
+
+- FFmpeg `-re`, global `hlsAlwaysRemux`, HLS önizleme, RTSP/VLC, yayın başlat/durdur, dosya yok uyarısı, MediaMTX v1.18.2.
+
+---
+
+### Bilinen sınırlamalar (v1.03)
+
+- Yeni disk kökü için `.env` + compose mount + konteyner yeniden oluşturma gerekir (tamamen panelden rastgele PC yolu eklenemez).
+- Özel kayıt yeri silindiğinde diskteki klasör otomatik silinmez.
+- `/mnt` altındaki içerik sistemin mount düzenine bağlıdır (USB, NFS vb.).
+
 ### Yapılacaklar / planlanan (bu bölümü güncelleyin)
 
-<!-- Gelecek sürümler için madde ekleyin; tamamlananları ilgili sürüm bölümüne taşıyın. -->
-
-- [ ] _(örnek)_ Çoklu disk / özel kayıt yolu
+- [ ] Kullanıcı girişi / yetkilendirme
+- [ ] Canlı kamera ingest (RTSP push)
+- [ ] Thumbnail / önizleme karesi
+- [ ] H.265 / AV1 otomatik transcoding seçeneği
+- [ ] Mevcut özel kayıt yerlerinin host_path alanını toplu düzeltme aracı
 - [ ] _(örnek)_ Kullanıcı girişi / yetkilendirme
 - [ ] _(örnek)_ Canlı kamera ingest (RTSP push)
 - [ ] _(örnek)_ Thumbnail / önizleme karesi

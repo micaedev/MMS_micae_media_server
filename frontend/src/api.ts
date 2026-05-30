@@ -1,9 +1,38 @@
+export type StorageVolume = {
+  id: string;
+  label: string;
+  host_path: string;
+  container_path: string;
+  custom: boolean;
+};
+
+export type StorageRoot = {
+  id: string;
+  label: string;
+  host_path: string;
+  container_path: string;
+  available: boolean;
+};
+
+export type BrowseEntry = { name: string; path: string };
+
+export type BrowseResult = {
+  root_id: string;
+  root_label: string;
+  current_path: string;
+  parent_path: string | null;
+  host_display: string;
+  entries: BrowseEntry[];
+};
+
 export type Video = {
   id: string;
   title: string;
   filename: string;
   size: number;
   stream_path: string;
+  storage_id: string;
+  storage_label: string;
   created_at: string;
   rtsp_url: string;
   webrtc_url: string;
@@ -31,6 +60,73 @@ function parseApiError(body: unknown, fallback: string): string {
   return fallback;
 }
 
+const STORAGE_PREF_KEY = "mediaserver.storage_id";
+
+export function getPreferredStorageId(): string {
+  return localStorage.getItem(STORAGE_PREF_KEY) || "default";
+}
+
+export function setPreferredStorageId(id: string): void {
+  localStorage.setItem(STORAGE_PREF_KEY, id);
+}
+
+export async function fetchStorageVolumes(): Promise<StorageVolume[]> {
+  const res = await fetch("/api/storage/volumes");
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(parseApiError(body, "Depolama listesi alınamadı"));
+  }
+  return res.json();
+}
+
+export async function fetchStorageRoots(): Promise<StorageRoot[]> {
+  const res = await fetch("/api/storage/roots");
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(parseApiError(body, "Disk listesi alınamadı"));
+  }
+  return res.json();
+}
+
+export async function browseStorage(
+  rootId: string,
+  path = "",
+): Promise<BrowseResult> {
+  const q = new URLSearchParams({ root_id: rootId, path });
+  const res = await fetch(`/api/storage/browse?${q}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(parseApiError(body, "Klasör gezilemedi"));
+  }
+  return res.json();
+}
+
+export async function createStorageLocation(body: {
+  root_id: string;
+  browse_path: string;
+  folder_name: string;
+  label: string;
+}): Promise<StorageVolume> {
+  const res = await fetch("/api/storage/locations", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => null);
+    throw new Error(parseApiError(data, "Kayıt yeri oluşturulamadı"));
+  }
+  return res.json();
+}
+
+export async function deleteStorageLocation(id: string): Promise<void> {
+  const res = await fetch(`/api/storage/locations/${id}`, { method: "DELETE" });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(parseApiError(body, "Kayıt yeri silinemedi"));
+  }
+}
+
 export async function fetchVideos(): Promise<Video[]> {
   const res = await fetch("/api/videos");
   if (!res.ok) {
@@ -42,12 +138,14 @@ export async function fetchVideos(): Promise<Video[]> {
 
 export async function uploadVideo(
   file: File,
+  storageId: string,
   onProgress?: (pct: number) => void,
 ): Promise<Video> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     const form = new FormData();
     form.append("file", file);
+    form.append("storage_id", storageId);
 
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable && onProgress) {

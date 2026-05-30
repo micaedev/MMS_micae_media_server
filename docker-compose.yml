@@ -9,6 +9,9 @@ services:
       MEDIASERVER_PUBLIC_HOST: ${MEDIASERVER_PUBLIC_HOST:-127.0.0.1}
     volumes:
       - ./data/videos:/videos
+      - /media:/host/media:rw
+      - /mnt:/host/mnt:rw
+      - ${STORAGE_EXTRA_HOST_PATH:-./data/.optional-extra}:/host/extra:rw
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9997/v3/config/global/get"]
@@ -32,8 +35,13 @@ services:
       HLS_BASE_URL: http://host.docker.internal:8888
       MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-53687091200}
       DATABASE_URL: sqlite:////data/app.db
+      STORAGE_VOLUMES: ${STORAGE_VOLUMES:-default:/videos:Varsayılan (data/videos)|./data/videos}
+      STORAGE_BROWSE_ROOTS: ${STORAGE_BROWSE_ROOTS:-media:/host/media:Media diski|/media;mnt:/host/mnt:Mount (/mnt)|/mnt;extra:/host/extra:Ek disk|/host/extra}
     volumes:
       - ./data/videos:/videos
+      - /media:/host/media:rw
+      - /mnt:/host/mnt:rw
+      - ${STORAGE_EXTRA_HOST_PATH:-./data/.optional-extra}:/host/extra:rw
       - api-data:/data
     ports:
       - "8080:8080"

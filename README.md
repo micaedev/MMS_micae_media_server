@@ -1,6 +1,6 @@
 # Media Server
 
-**Sürüm 1.02** — Web panelinden video yükleyin; tarayıcıda **HLS**, VLC’de **RTSP** ile izleyin. Arka planda [MediaMTX](https://github.com/bluenviron/mediamtx) çalışır.
+**Sürüm 1.03** — Web panelinden video yükleyin; tarayıcıda **HLS**, VLC’de **RTSP** ile izleyin. Kurulum ve izleme ayrı ekranlar; çoklu disk ve panelden klasör oluşturma. Arka planda [MediaMTX](https://github.com/bluenviron/mediamtx) çalışır.
 
 Detaylı özellik listesi ve planlanan işler: **[docs/VERSION.md](docs/VERSION.md)**
 
@@ -36,12 +36,41 @@ docker compose up --build -d
 - **HLS:** http://\<IP\>:8888/\<video-id\>/index.m3u8
 - **RTSP:** rtsp://\<IP\>:8554/\<video-id\>
 
+## Panel ekranları
+
+| Yol | Açıklama |
+|-----|----------|
+| `/` | Ana sayfa — Kurulum veya İzleme |
+| `/setup` | Video yükleme, disk seçimi, yayın yönetimi |
+| `/watch` | HLS önizleme, RTSP/HLS URL kopyalama |
+
+## Çoklu disk (depolama)
+
+**Kurulum** ekranından (`/setup`) disk köküne girip yeni klasör oluşturabilirsiniz. Bunun için disk Docker içinde mount edilmiş olmalı.
+
+Varsayılan gezinti: `/media`, `/mnt`, `/host/extra` (`.env` ile `STORAGE_BROWSE_ROOTS`).
+
+Örnek — disk `/media/micae/store` üzerinde klasör:
+
+```env
+STORAGE_EXTRA_HOST_PATH=/media/micae/store
+STORAGE_BROWSE_ROOTS=media:/host/media:/media;store:/host/extra:Mağaza diski|/media/micae/store
+```
+
+```bash
+docker compose up -d --force-recreate api engine
+```
+
+Panel: **Kurulum → Başka diskte yeni klasör oluştur** → diski seç → klasöre gir → klasör adı → **Oluştur ve seç**.
+
 ## Ortam değişkenleri
 
 | Değişken | Açıklama |
 |----------|----------|
 | `MEDIASERVER_PUBLIC_HOST` | LAN IP (URL ve WebRTC ICE) |
 | `MAX_UPLOAD_BYTES` | Yükleme limiti (varsayılan ~50 GB, `0` = sınırsız) |
+| `STORAGE_VOLUMES` | `id:konteyner:etiket\|host_yol` listesi (`;` ile ayrılır) |
+| `STORAGE_DISK_2_MOUNT` | İkinci bind mount (host yolu) |
 
 ## Sorun giderme
 
@@ -61,7 +90,7 @@ curl -s http://localhost:8080/api/health
 
 ## Kaynak kod
 
-https://github.com/micaedev/MMS_micae_media_server — sürüm **v1.02** (`main`)
+https://github.com/micaedev/MMS_micae_media_server — sürüm **v1.03** (`main`)
 
 ## Geliştirme
 
