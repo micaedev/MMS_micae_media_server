@@ -1,6 +1,6 @@
 # Media Server
 
-**Sürüm 1.01** — Web panelinden video yükleyin; tarayıcıda **HLS**, VLC’de **RTSP** ile izleyin. Arka planda [MediaMTX](https://github.com/bluenviron/mediamtx) çalışır.
+**Sürüm 1.01** — Web panelinden video yükleyin; tarayıcıda **HLS**, VLC’de **RTSP** ile izleyin.
 
 ## Proje yapısı
 
