@@ -1,25 +1,48 @@
 import { useEffect, useRef, useState } from "react";
 import Hls from "hls.js";
 import { fetchVideoStatus, startStream } from "./api";
-import { hlsUrl, watchPageUrl } from "./whep";
+import { hlsDirectUrl, hlsUrl, watchPageUrl } from "./whep";
 
 type Props = {
   videoId: string;
   title: string;
+  /** API'den gelen HLS URL (PUBLIC_HOST ile) */
+  apiHlsUrl?: string;
 };
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export default function BrowserPreview({ videoId, title }: Props) {
+async function waitForHlsManifest(
+  urls: string[],
+  maxWaitMs = 90_000,
+): Promise<string | null> {
+  const tried = [...new Set(urls.filter(Boolean))];
+  const deadline = Date.now() + maxWaitMs;
+  while (Date.now() < deadline) {
+    for (const url of tried) {
+      try {
+        const res = await fetch(url, { cache: "no-store" });
+        if (res.ok && (await res.text()).includes("#EXTM3U")) return url;
+      } catch {
+        /* retry */
+      }
+    }
+    await sleep(1500);
+  }
+  return null;
+}
+
+export default function BrowserPreview({ videoId, title, apiHlsUrl }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
   const [message, setMessage] = useState("Yayın hazırlanıyor…");
   const [error, setError] = useState<string | null>(null);
   const [playHls, setPlayHls] = useState(false);
-  const [showWebRtc, setShowWebRtc] = useState(false);
-  const streamUrl = hlsUrl(videoId);
+  const [activeUrl, setActiveUrl] = useState("");
+  const proxyUrl = hlsUrl(videoId);
+  const directUrl = hlsDirectUrl(videoId);
   const webrtcUrl = watchPageUrl(videoId);
 
   useEffect(() => {
@@ -28,24 +51,42 @@ export default function BrowserPreview({ videoId, title }: Props) {
     async function prepare() {
       setError(null);
       setPlayHls(false);
-      setMessage("FFmpeg yayını başlatılıyor (ilk açılış 10–30 sn)…");
+      setActiveUrl("");
+      setMessage("Yayın başlatılıyor (normal hız, -re)…");
 
       try {
-        const start = await startStream(videoId);
+        await startStream(videoId);
         if (cancelled) return;
 
-        if (!start.ready) {
-          for (let i = 0; i < 40 && !cancelled; i++) {
-            const st = await fetchVideoStatus(videoId);
-            if (st.ready) break;
-            await sleep(500);
-          }
+        for (let i = 0; i < 90 && !cancelled; i++) {
+          const st = await fetchVideoStatus(videoId);
+          if (st.ready) break;
+          setMessage(`FFmpeg bekleniyor… (${i + 1}/90)`);
+          await sleep(1000);
         }
 
-        if (!cancelled) {
-          setMessage("Yayın hazır — HLS oynatıcı başlıyor.");
-          setPlayHls(true);
+        if (cancelled) return;
+
+        await sleep(3000);
+
+        const candidates = [apiHlsUrl, directUrl, proxyUrl].filter(
+          Boolean,
+        ) as string[];
+        setMessage("HLS manifest bekleniyor…");
+        const okUrl = await waitForHlsManifest(candidates, 90_000);
+        if (cancelled) return;
+
+        if (!okUrl) {
+          setError(
+            "HLS açılamadı. Önce Yeniden baslat, sonra tekrar dene. Test: curl -sI " +
+              directUrl,
+          );
+          return;
         }
+
+        setActiveUrl(okUrl);
+        setMessage("HLS oynatılıyor (önerilen). WebRTC hızlı/bozuksa kullanmayın.");
+        setPlayHls(true);
       } catch (e) {
         if (!cancelled) {
           setError(e instanceof Error ? e.message : "Hazırlık hatası");
@@ -57,49 +98,61 @@ export default function BrowserPreview({ videoId, title }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [videoId]);
+  }, [videoId, apiHlsUrl, directUrl, proxyUrl]);
 
   useEffect(() => {
-    if (!playHls || !videoRef.current) return;
+    if (!playHls || !activeUrl || !videoRef.current) return;
 
     const video = videoRef.current;
-    let hls: Hls | null = null;
 
-    if (Hls.isSupported()) {
-      hls = new Hls({
-        enableWorker: true,
-        lowLatencyMode: false,
-        xhrSetup: (xhr) => {
-          xhr.withCredentials = false;
-        },
-      });
-      hlsRef.current = hls;
-      hls.loadSource(streamUrl);
-      hls.attachMedia(video);
-      hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        void video.play().catch(() => {
-          /* autoplay engellenirse kullanıcı play'e basar */
-        });
-      });
-      hls.on(Hls.Events.ERROR, (_e, data) => {
-        if (data.fatal) {
-          setError(`HLS hatası: ${data.type} — ${data.details}`);
-        }
-      });
-    } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
-      video.src = streamUrl;
+    if (
+      !Hls.isSupported() &&
+      video.canPlayType("application/vnd.apple.mpegurl")
+    ) {
+      video.src = activeUrl;
       void video.play().catch(() => undefined);
-    } else {
-      setError("Tarayıcı HLS desteklemiyor.");
+      return () => {
+        video.removeAttribute("src");
+        video.load();
+      };
     }
 
+    if (!Hls.isSupported()) {
+      setError("Tarayıcı HLS desteklemiyor.");
+      return;
+    }
+
+    const hls = new Hls({
+      enableWorker: true,
+      lowLatencyMode: false,
+      liveDurationInfinity: true,
+      manifestLoadingMaxRetry: 8,
+      levelLoadingMaxRetry: 8,
+      fragLoadingMaxRetry: 6,
+    });
+    hlsRef.current = hls;
+    hls.loadSource(activeUrl);
+    hls.attachMedia(video);
+    hls.on(Hls.Events.MANIFEST_PARSED, () => {
+      void video.play().catch(() => undefined);
+    });
+    hls.on(Hls.Events.ERROR, (_e, data) => {
+      if (data.fatal && data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+        hls.startLoad();
+        return;
+      }
+      if (data.fatal) {
+        setError(`HLS: ${data.type} — ${data.details}`);
+      }
+    });
+
     return () => {
-      hls?.destroy();
+      hls.destroy();
       hlsRef.current = null;
       video.removeAttribute("src");
       video.load();
     };
-  }, [playHls, streamUrl]);
+  }, [playHls, activeUrl]);
 
   return (
     <section className="card preview">
@@ -121,21 +174,18 @@ export default function BrowserPreview({ videoId, title }: Props) {
       />
 
       <p className="help">
-        HLS: <code>{streamUrl}</code> (port <strong>8888</strong>). Ses yoksa video
-        sessiz yüklenir — ses düğmesine basın.
+        ID: <code>{videoId}</code>
+        <br />
+        HLS (önerilen): <code>{apiHlsUrl || directUrl}</code>
+        <br />
+        WebRTC hızlı oynuyorsa yayındaki <strong>-re</strong> eksikti; Yeniden
+        baslat gerekir.
       </p>
 
-      <details
-        style={{ marginTop: "0.75rem" }}
-        open={showWebRtc}
-        onToggle={(e) => setShowWebRtc((e.target as HTMLDetailsElement).open)}
-      >
+      <details style={{ marginTop: "0.75rem" }}>
         <summary style={{ cursor: "pointer" }}>
-          WebRTC (düşük gecikme, deneysel)
+          WebRTC (deneysel — hızlı/bozuk görüntü olabilir)
         </summary>
-        <p className="help" style={{ marginTop: "0.5rem" }}>
-          Yerel ağda STUN kapalıdır; yine de bağlanmazsa HLS kullanın.
-        </p>
         <iframe
           title={`WebRTC ${title}`}
           src={webrtcUrl}
@@ -149,11 +199,6 @@ export default function BrowserPreview({ videoId, title }: Props) {
           }}
           allow="autoplay; fullscreen"
         />
-        <p className="help">
-          <a href={webrtcUrl} target="_blank" rel="noreferrer">
-            WebRTC yeni sekme
-          </a>
-        </p>
       </details>
     </section>
   );

@@ -11,9 +11,12 @@ VIDEOS_DIR = Path(os.getenv("VIDEOS_DIR", "/videos"))
 PUBLIC_HOST = os.getenv("PUBLIC_HOST", "localhost")
 WEBRTC_PORT = int(os.getenv("WEBRTC_PORT", "8889"))
 HLS_PORT = int(os.getenv("HLS_PORT", "8888"))
+HLS_BASE_URL = os.getenv(
+    "HLS_BASE_URL", "http://host.docker.internal:8888"
+).rstrip("/")
 RTSP_PORT = int(os.getenv("RTSP_PORT", "8554"))
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:////data/app.db")
 _default_max = 50 * 1024 * 1024 * 1024
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(_default_max)))
 
-ALLOWED_EXTENSIONS = {".mp4", ".mkv", ".mov"}
+ALLOWED_EXTENSIONS = {".mp4", ".mkv", ".mov", ".webm"}

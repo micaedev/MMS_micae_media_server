@@ -79,6 +79,8 @@ export async function uploadVideo(
 export type StreamStart = {
   status: string;
   ready: boolean;
+  hls_ready?: boolean;
+  mtx_path?: string;
   tracks: string[];
   hint?: string;
 };
@@ -97,7 +99,12 @@ export async function fetchVideoStatus(id: string): Promise<{
 }
 
 export async function startStream(id: string): Promise<StreamStart> {
-  const res = await fetch(`/api/videos/${id}/start`, { method: "POST" });
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 120_000);
+  const res = await fetch(`/api/videos/${id}/start`, {
+    method: "POST",
+    signal: ctrl.signal,
+  }).finally(() => clearTimeout(t));
   if (!res.ok) {
     const body = await res.json().catch(() => null);
     throw new Error(parseApiError(body, "Yayın başlatılamadı"));

@@ -29,6 +29,7 @@ services:
       PUBLIC_HOST: ${MEDIASERVER_PUBLIC_HOST:-127.0.0.1}
       WEBRTC_PORT: "8889"
       HLS_PORT: "8888"
+      HLS_BASE_URL: http://host.docker.internal:8888
       MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-53687091200}
       DATABASE_URL: sqlite:////data/app.db
     volumes:

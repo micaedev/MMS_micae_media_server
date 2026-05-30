@@ -1,6 +1,8 @@
 # Media Server
 
-**Sürüm 1.01** — Web panelinden video yükleyin; tarayıcıda **HLS**, VLC’de **RTSP** ile izleyin.
+**Sürüm 1.02** — Web panelinden video yükleyin; tarayıcıda **HLS**, VLC’de **RTSP** ile izleyin. Arka planda [MediaMTX](https://github.com/bluenviron/mediamtx) çalışır.
+
+Detaylı özellik listesi ve planlanan işler: **[docs/VERSION.md](docs/VERSION.md)**
 
 ## Proje yapısı
 
@@ -57,21 +59,9 @@ curl -s http://localhost:8080/api/health
 | Dosya yok uyarısı | Video `data/videos/` altında mı? Yoksa listeden silin |
 | Yayın durmuyor | **Durdur** / **Tümünü durdur**; **Başlat** ile tekrar açın |
 
-## GitHub’a v1.01 yayınlama (eski repoyu silip yeniden açma)
+## Kaynak kod
 
-```bash
-cd ~/Projects/mediaserver
-git add -A
-git commit -m "Release v1.01: Media Server panel"
-git checkout -B main
-git tag -f v1.01 -m "Media Server v1.01"
-
-gh repo delete micaedev/mediaserver --yes
-gh repo create micaedev/mediaserver --public \
-  --description "Media Server web panel - HLS/RTSP video streaming" \
-  --source=. --remote=origin --push
-git push origin v1.01
-```
+https://github.com/micaedev/MMS_micae_media_server — sürüm **v1.02** (`main`)
 
 ## Geliştirme
 

@@ -249,14 +249,14 @@ export default function App() {
           <input
             ref={inputRef}
             type="file"
-            accept=".mp4,.mkv,.mov,video/*"
+            accept=".mp4,.mkv,.mov,.webm,video/*"
             disabled={uploading}
             onChange={(e) => void handleFile(e.target.files?.[0])}
           />
           {uploading ? (
             <p>Yükleniyor… %{progress}</p>
           ) : (
-            <p>Video sürükleyin veya tıklayarak seçin (.mp4, .mkv, .mov)</p>
+            <p>Video sürükleyin veya tıklayarak seçin (.mp4, .mkv, .mov, .webm)</p>
           )}
         </div>
         {uploading && (
@@ -438,6 +438,7 @@ export default function App() {
         <BrowserPreview
           videoId={previewVideo.id}
           title={previewVideo.title}
+          apiHlsUrl={previewVideo.hls_url}
         />
       )}
     </>

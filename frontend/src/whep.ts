@@ -17,7 +17,12 @@ export function whepUrl(pathId: string): string {
   return `${watchPageUrl(pathId)}/whep`;
 }
 
-/** HLS (tarayıcıda güvenilir oynatma) */
+/** HLS — panel ile aynı kök (nginx /hls → MediaMTX 8888) */
 export function hlsUrl(pathId: string): string {
+  return `/hls/${pathId}/index.m3u8`;
+}
+
+/** Doğrudan MediaMTX HLS (VLC / harici oyuncu) */
+export function hlsDirectUrl(pathId: string): string {
   return `http://${host()}:${HLS_PORT}/${pathId}/index.m3u8`;
 }

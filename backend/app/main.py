@@ -80,6 +80,11 @@ def _engine_media_path(video: models.Video) -> str:
     return f"/videos/{video.filename}"
 
 
+def _mtx_path(video: models.Video) -> str:
+    """MediaMTX path adi her zaman video id ile ayni olmali."""
+    return video.id
+
+
 def _file_exists(video: models.Video) -> bool:
     return _video_file_path(video).is_file()
 
@@ -95,7 +100,7 @@ def _require_video_file(video: models.Video) -> None:
 
 async def _stop_mediaserver_path(video: models.Video) -> None:
     try:
-        await media_server.delete_path(video.stream_path)
+        await media_server.delete_path(_mtx_path(video))
     except MediaServerError as e:
         if e.status_code != 404:
             raise
@@ -153,7 +158,7 @@ async def _video_with_status(video: models.Video) -> VideoOut:
         return _to_video_out(video, file_exists=False)
 
     try:
-        st = await media_server.get_path_status(video.stream_path)
+        st = await media_server.get_path_status(_mtx_path(video))
         status = _status_label(
             st["ready"],
             len(st["readers"]),
@@ -186,7 +191,7 @@ async def sync_all_paths(db: Session = Depends(get_db)):
             skipped += 1
             continue
         await media_server.reload_path(
-            video.stream_path, _engine_media_path(video)
+            _mtx_path(video), _engine_media_path(video)
         )
         synced += 1
     return {
@@ -206,7 +211,7 @@ async def restart_all_streams(db: Session = Depends(get_db)):
             skipped += 1
             continue
         await media_server.reload_path(
-            video.stream_path, _engine_media_path(video)
+            _mtx_path(video), _engine_media_path(video)
         )
         restarted += 1
     return {
@@ -238,28 +243,24 @@ async def stop_all_streams(db: Session = Depends(get_db)):
 async def start_all_streams(db: Session = Depends(get_db)):
     videos = db.query(models.Video).all()
     started = 0
-    already = 0
     skipped = 0
     for video in videos:
         if not _file_exists(video):
             skipped += 1
             continue
-        if await media_server.path_configured(video.stream_path):
-            already += 1
-            continue
         try:
-            await media_server.ensure_path(
-                video.stream_path,
+            await media_server.reload_path(
+                _mtx_path(video),
                 _engine_media_path(video),
             )
+            await media_server.wake_publisher(_mtx_path(video), timeout_sec=30.0)
         except MediaServerError as e:
             raise HTTPException(502, str(e)) from e
         started += 1
     return {
         "started": started,
-        "already_running": already,
         "skipped_missing": skipped,
-        "note": "Durdurulmus yayinlar baslatildi",
+        "note": "Tum yayinlar baslatildi",
     }
 
 
@@ -308,6 +309,7 @@ async def upload_video(
     container_path = f"/videos/{stored_name}"
     try:
         await media_server.add_path(video_id, container_path)
+        await media_server.wake_publisher(video_id, timeout_sec=45.0)
     except MediaServerError as e:
         dest.unlink(missing_ok=True)
         logger.error("Media Server path eklenemedi: %s", e)
@@ -336,21 +338,24 @@ async def restart_video_stream(video_id: str, db: Session = Depends(get_db)):
 
     try:
         await media_server.reload_path(
-            video.stream_path, _engine_media_path(video)
+            _mtx_path(video), _engine_media_path(video)
         )
-        st = await media_server.wake_publisher(video.stream_path, timeout_sec=35.0)
+        path = _mtx_path(video)
+        st = await media_server.wake_publisher(path, timeout_sec=45.0)
     except MediaServerError as e:
         raise HTTPException(502, str(e)) from e
 
     reader_count = len(st["readers"])
     return {
         "id": video_id,
+        "mtx_path": path,
         "status": _status_label(
             st["ready"],
             reader_count,
             path_exists=st.get("exists", True),
         ),
         "ready": st["ready"],
+        "hls_ready": st.get("ready", False),
         "tracks": st.get("tracks", []),
         "message": "Yayin yeniden baslatildi",
     }
@@ -384,26 +389,27 @@ async def start_video_stream(video_id: str, db: Session = Depends(get_db)):
     _require_video_file(video)
 
     try:
-        await media_server.ensure_path(
-            video.stream_path, _engine_media_path(video)
-        )
-        st = await media_server.wake_publisher(video.stream_path, timeout_sec=35.0)
+        path = _mtx_path(video)
+        await media_server.reload_path(path, _engine_media_path(video))
+        st = await media_server.wake_publisher(path, timeout_sec=45.0)
     except MediaServerError as e:
         raise HTTPException(502, str(e)) from e
 
     reader_count = len(st["readers"])
     return {
+        "mtx_path": path,
         "status": _status_label(
             st["ready"],
             reader_count,
             path_exists=st.get("exists", True),
         ),
         "ready": st["ready"],
+        "hls_ready": st.get("ready", False),
         "tracks": st.get("tracks", []),
         "hint": (
-            "Yayın hazır; WebRTC oynatıcıyı açabilirsiniz."
+            "Yayın hazır; tarayıcıda izleyebilirsiniz."
             if st["ready"]
-            else "Yayın henüz hazır değil — birkaç saniye sonra tekrar deneyin."
+            else "Yayın henüz hazır değil — Yeniden baslat deneyin."
         ),
     }
 
@@ -423,7 +429,7 @@ async def video_status(video_id: str, db: Session = Depends(get_db)):
         )
 
     try:
-        st = await media_server.get_path_status(video.stream_path)
+        st = await media_server.get_path_status(_mtx_path(video))
     except MediaServerError as e:
         raise HTTPException(502, str(e)) from e
 
@@ -448,7 +454,7 @@ async def delete_video(video_id: str, db: Session = Depends(get_db)):
         raise HTTPException(404, "Video bulunamadı")
 
     try:
-        await media_server.delete_path(video.stream_path)
+        await media_server.delete_path(_mtx_path(video))
     except MediaServerError as e:
         if e.status_code != 404:
             raise HTTPException(502, str(e)) from e

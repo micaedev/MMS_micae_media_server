@@ -22,6 +22,8 @@ webrtcICEServers2: []
 hls: true
 hlsAddress: :8888
 hlsAllowOrigins: ["*"]
+# İstek gelmeden segment üret (HLS gecikmesini azaltır)
+hlsAlwaysRemux: true
 
 authMethod: internal
 authInternalUsers:
