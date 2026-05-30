@@ -1,6 +1,6 @@
 # Media Server
 
-**Sürüm 1.03** — Web panelinden video yükleyin; tarayıcıda **HLS**, VLC’de **RTSP** ile izleyin. Kurulum ve izleme ayrı ekranlar; çoklu disk ve panelden klasör oluşturma. Arka planda [MediaMTX](https://github.com/bluenviron/mediamtx) çalışır.
+**Sürüm 1.04** — Web panelinden video yükleyin; tarayıcıda **HLS**, VLC’de **RTSP** ile izleyin. İzleme ekranında önizleme karesi, net yayın butonları. Arka planda [MediaMTX](https://github.com/bluenviron/mediamtx) çalışır.
 
 Detaylı özellik listesi ve planlanan işler: **[docs/VERSION.md](docs/VERSION.md)**
 
@@ -90,7 +90,7 @@ curl -s http://localhost:8080/api/health
 
 ## Kaynak kod
 
-https://github.com/micaedev/MMS_micae_media_server — sürüm **v1.03** (`main`)
+https://github.com/micaedev/MMS_micae_media_server — sürüm **v1.04** (`main`)
 
 ## Geliştirme
 

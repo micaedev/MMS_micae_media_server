@@ -4,6 +4,87 @@ Bu dosya her sürümün **ne yapabildiğini** ve **planlanan işleri** tutar. Ye
 
 ---
 
+## v1.04 (2026-05-30) — izleme önizlemesi ve UX iyileştirmeleri
+
+**Depo:** [MMS_micae_media_server](https://github.com/micaedev/MMS_micae_media_server)  
+**Etiket:** `v1.04`
+
+### Özet
+
+İzleme ekranına videonun **ilk karesi (JPEG)** eklendi; satır düzeni genişletildi, aksiyon butonları küçültüldü ve etiketler sadeleştirildi (**Web'de Aç/Kapat**, sürekli **Başlat/Bitir**). HLS oynatıcı tablo ile aynı kart içinde gösterilir; tablo alt çizgileri hizalandı.
+
+---
+
+### Önizleme karesi (thumbnail)
+
+| Özellik | Açıklama |
+|---------|----------|
+| **Üretim** | FFmpeg ile videonun ilk karesi; dosya adı `{video-id}.jpg` (video ile aynı klasör) |
+| **Yükleme** | Upload sonrası otomatik üretim |
+| **Mevcut videolar** | İlk `GET /api/videos/{id}/thumbnail` isteğinde üretilir (lazy) |
+| **Çözünürlük** | Genişlik 192 px (kaynak), panelde **120×68** px gösterim |
+| **Silme** | Video silinince `.jpg` de silinir |
+
+#### API
+
+- `GET /api/videos/{id}/thumbnail` — `image/jpeg`, `Cache-Control: max-age=86400`
+- `VideoOut.thumbnail_url` — `/api/videos/{id}/thumbnail`
+
+#### Backend
+
+- Yeni modül: `backend/app/thumbnails.py`
+
+#### Frontend
+
+- Yeni bileşen: `frontend/src/components/VideoThumbnail.tsx`
+- İzleme tablosunda **Önizleme** sütunu (Başlık ile Disk arasında)
+
+---
+
+### İzleme ekranı (`/watch`) — düzen ve butonlar
+
+#### Tablo / görünüm
+
+- Sınıf: `watch-table` — tam genişlik, tutarlı `border-bottom` satır çizgileri
+- Önizleme boyutu: **120×68** px (16:9, `object-fit: cover`)
+- Satır padding artırıldı; panel max genişlik **1100** px
+- HLS oynatıcı (`BrowserPreview`) tablonun **altında**, aynı `card` içinde; üstte tam genişlik ayırıcı
+- Alt yardım metni (`HLS önerilir…`) üst border ile ayrıldı
+
+#### İşlem butonları (~%20 küçük)
+
+- Grid: `watch-actions-grid` — 3 sütun, sabit satır yüksekliği
+- Font ~0.64rem, kompakt padding
+
+| Buton | Davranış |
+|-------|----------|
+| **Web'de Aç** | Satır altında HLS önizlemeyi açar |
+| **Web'de Kapat** | Önizlemeyi kapatır (eski: Tarayıcıda izle / Kapat) |
+| **Başlat** | Her zaman görünür; `stopped` → start, aksi halde restart |
+| **Bitir** | Her zaman görünür; yayını durdurur (`POST .../stop`), önizleme açıksa kapatır |
+| **RTSP** / **HLS URL** / **WebRTC** | URL kopyala veya WebRTC sekme |
+
+---
+
+### v1.03’ten devralınan (değişmedi)
+
+- Ana sayfa / Kurulum / İzleme ayrımı, disk gezgini, kayıt yeri sihirbazı, çoklu mount, FFmpeg `-re`, global `hlsAlwaysRemux`.
+
+---
+
+### Bilinen sınırlamalar (v1.04)
+
+- Thumbnail üretilemezse (bozuk codec) gri **—** placeholder gösterilir.
+- Eski `.jpg` dosyaları daha düşük çözünürlükte kalabilir; silinip sayfa yenilenince yeniden üretilir.
+
+### Yapılacaklar / planlanan
+
+- [ ] Kullanıcı girişi / yetkilendirme
+- [ ] Canlı kamera ingest
+- [ ] Thumbnail yenileme (video değişince otomatik)
+
+---
+
 ## v1.02 (2026-05-30) — kararlı yayın
 
 **Depo:** [MMS_micae_media_server](https://github.com/micaedev/MMS_micae_media_server)  

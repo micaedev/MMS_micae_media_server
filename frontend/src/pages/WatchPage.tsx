@@ -10,6 +10,7 @@ import {
 import BrowserPreview from "../BrowserPreview";
 import AppNav from "../components/AppNav";
 import StatusBadge from "../components/StatusBadge";
+import VideoThumbnail from "../components/VideoThumbnail";
 import { useVideos } from "../hooks/useVideos";
 import { formatBytes, formatDate } from "../utils/format";
 import { watchPageUrl } from "../whep";
@@ -21,25 +22,39 @@ async function copyText(text: string) {
 export default function WatchPage() {
   const { videos, loading, error, setError, load } = useVideos();
   const [previewId, setPreviewId] = useState<string | null>(null);
-  const [restartingId, setRestartingId] = useState<string | null>(null);
+  const [startingId, setStartingId] = useState<string | null>(null);
   const [restartingAll, setRestartingAll] = useState(false);
   const [stoppingId, setStoppingId] = useState<string | null>(null);
   const [stoppingAll, setStoppingAll] = useState(false);
   const [startingAll, setStartingAll] = useState(false);
-  const streamBusy = restartingAll || stoppingAll || startingAll;
+  const streamBusy =
+    restartingAll || stoppingAll || startingAll || startingId !== null;
 
-  const onStartOrRestart = async (video: (typeof videos)[0]) => {
-    const starting = video.status === "stopped";
+  const onStart = async (video: (typeof videos)[0]) => {
     try {
       setError(null);
-      setRestartingId(video.id);
-      if (starting) await startStream(video.id);
+      setStartingId(video.id);
+      if (video.status === "stopped") await startStream(video.id);
       else await restartStream(video.id);
       await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Yayın işlemi başarısız");
+      setError(e instanceof Error ? e.message : "Yayın başlatılamadı");
     } finally {
-      setRestartingId(null);
+      setStartingId(null);
+    }
+  };
+
+  const onStop = async (video: (typeof videos)[0]) => {
+    try {
+      setError(null);
+      setStoppingId(video.id);
+      await stopStream(video.id);
+      if (previewId === video.id) setPreviewId(null);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Yayın durdurulamadı");
+    } finally {
+      setStoppingId(null);
     }
   };
 
@@ -120,10 +135,11 @@ export default function WatchPage() {
             Henüz video yok. <a href="/setup">Kurulum</a> ekranından yükleyin.
           </p>
         ) : (
-          <table>
+          <table className="watch-table">
             <thead>
               <tr>
                 <th>Başlık</th>
+                <th className="col-thumb">Önizleme</th>
                 <th>Disk</th>
                 <th>Tarih</th>
                 <th>Durum</th>
@@ -135,13 +151,21 @@ export default function WatchPage() {
                 const missing = !v.file_exists;
                 return (
                   <tr key={v.id} className={missing ? "row-missing" : undefined}>
-                    <td>
+                    <td className="col-title">
                       <strong>{v.title}</strong>
                       {!missing && (
                         <div className="url-row">
                           <code>{v.rtsp_url}</code>
                         </div>
                       )}
+                    </td>
+                    <td className="col-thumb">
+                      <VideoThumbnail
+                        videoId={v.id}
+                        title={v.title}
+                        thumbnailUrl={v.thumbnail_url}
+                        missing={missing}
+                      />
                     </td>
                     <td>
                       <span className="storage-tag">
@@ -152,53 +176,65 @@ export default function WatchPage() {
                     <td>
                       <StatusBadge status={v.status} fileExists={v.file_exists} />
                     </td>
-                    <td>
-                      <button
-                        type="button"
-                        className="btn btn-primary"
-                        disabled={missing}
-                        onClick={() =>
-                          setPreviewId(previewId === v.id ? null : v.id)
-                        }
-                      >
-                        {previewId === v.id ? "Kapat" : "Tarayıcıda izle"}
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-ghost"
-                        disabled={missing || streamBusy || restartingId === v.id}
-                        onClick={() => void onStartOrRestart(v)}
-                      >
-                        {restartingId === v.id
-                          ? "…"
-                          : v.status === "stopped"
-                            ? "Başlat"
-                            : "Yeniden başlat"}
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-ghost"
-                        disabled={missing}
-                        onClick={() => void copyText(v.rtsp_url)}
-                      >
-                        RTSP
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-ghost"
-                        disabled={missing}
-                        onClick={() => void copyText(v.hls_url)}
-                      >
-                        HLS URL
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-ghost"
-                        disabled={missing}
-                        onClick={() => window.open(watchPageUrl(v.id), "_blank")}
-                      >
-                        WebRTC
-                      </button>
+                    <td className="watch-actions">
+                      <div className="watch-actions-grid">
+                        <button
+                          type="button"
+                          className="btn btn-primary"
+                          disabled={missing}
+                          onClick={() =>
+                            setPreviewId(previewId === v.id ? null : v.id)
+                          }
+                        >
+                          {previewId === v.id ? "Web'de Kapat" : "Web'de Aç"}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-ghost"
+                          disabled={
+                            missing || streamBusy || startingId === v.id
+                          }
+                          onClick={() => void onStart(v)}
+                        >
+                          {startingId === v.id ? "…" : "Başlat"}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-ghost"
+                          disabled={
+                            missing || streamBusy || stoppingId === v.id
+                          }
+                          onClick={() => void onStop(v)}
+                        >
+                          {stoppingId === v.id ? "…" : "Bitir"}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-ghost"
+                          disabled={missing}
+                          onClick={() => void copyText(v.rtsp_url)}
+                        >
+                          RTSP
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-ghost"
+                          disabled={missing}
+                          onClick={() => void copyText(v.hls_url)}
+                        >
+                          HLS URL
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-ghost"
+                          disabled={missing}
+                          onClick={() =>
+                            window.open(watchPageUrl(v.id), "_blank")
+                          }
+                        >
+                          WebRTC
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 );
@@ -206,19 +242,20 @@ export default function WatchPage() {
             </tbody>
           </table>
         )}
-        <p className="help">
+        {previewVideo && (
+          <div className="watch-preview-panel">
+            <BrowserPreview
+              videoId={previewVideo.id}
+              title={previewVideo.title}
+              apiHlsUrl={previewVideo.hls_url}
+            />
+          </div>
+        )}
+        <p className="help watch-table-foot">
           <strong>HLS</strong> önerilir (8888). <strong>RTSP</strong> VLC için
           (8554).
         </p>
       </section>
-
-      {previewVideo && (
-        <BrowserPreview
-          videoId={previewVideo.id}
-          title={previewVideo.title}
-          apiHlsUrl={previewVideo.hls_url}
-        />
-      )}
     </>
   );
 }

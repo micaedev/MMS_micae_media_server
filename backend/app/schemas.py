@@ -56,6 +56,7 @@ class VideoOut(BaseModel):
     hls_url: str
     status: str = "idle"
     file_exists: bool = True
+    thumbnail_url: str = ""
 
     model_config = {"from_attributes": True}
 

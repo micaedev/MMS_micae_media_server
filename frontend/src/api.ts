@@ -41,6 +41,7 @@ export type Video = {
   hls_url: string;
   status: string;
   file_exists: boolean;
+  thumbnail_url: string;
 };
 
 function parseApiError(body: unknown, fallback: string): string {

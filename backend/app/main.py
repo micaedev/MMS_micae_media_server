@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
@@ -22,6 +23,7 @@ from app.database import Base, SessionLocal, engine, get_db
 from app.mediaserver_client import MediaServerClient, MediaServerError
 from app.migrate import run_migrations
 from app import storage
+from app import thumbnails
 from app.schemas import (
     BrowseOut,
     BrowseEntryOut,
@@ -174,6 +176,7 @@ def _to_video_out(
         hls_url=hls,
         status=status,
         file_exists=exists,
+        thumbnail_url=f"/api/videos/{video.id}/thumbnail" if exists else "",
     )
 
 
@@ -435,6 +438,11 @@ async def upload_video(
         dest.unlink(missing_ok=True)
         raise HTTPException(500, f"Dosya yazılamadı: {exc}") from exc
 
+    try:
+        await thumbnails.generate_thumbnail(dest)
+    except Exception as exc:
+        logger.warning("Thumbnail atlanadi (yukleme): %s", exc)
+
     container_path = f"{vol.container_path}/{stored_name}"
     try:
         await media_server.add_path(video_id, container_path)
@@ -544,6 +552,26 @@ async def start_video_stream(video_id: str, db: Session = Depends(get_db)):
     }
 
 
+@app.get("/api/videos/{video_id}/thumbnail")
+async def video_thumbnail(video_id: str, db: Session = Depends(get_db)):
+    video = db.get(models.Video, video_id)
+    if not video:
+        raise HTTPException(404, "Video bulunamadı")
+    if not _file_exists(video, db):
+        raise HTTPException(404, "Video dosyası yok")
+
+    video_path = _video_file_path(video, db)
+    thumb_path = await thumbnails.ensure_thumbnail(video_path)
+    if not thumb_path:
+        raise HTTPException(404, "Önizleme karesi üretilemedi")
+
+    return FileResponse(
+        thumb_path,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
 @app.get("/api/videos/{video_id}/status", response_model=VideoStatusOut)
 async def video_status(video_id: str, db: Session = Depends(get_db)):
     video = db.get(models.Video, video_id)
@@ -591,5 +619,7 @@ async def delete_video(video_id: str, db: Session = Depends(get_db)):
 
     file_path = _video_file_path(video, db)
     file_path.unlink(missing_ok=True)
+    thumb = thumbnails.thumbnail_path_for(file_path)
+    thumb.unlink(missing_ok=True)
     db.delete(video)
     db.commit()
