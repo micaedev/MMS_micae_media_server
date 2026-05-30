@@ -1,8 +1,12 @@
 import os
 from pathlib import Path
 
-MTX_API_URL = os.getenv("MTX_API_URL", "http://127.0.0.1:9997").rstrip("/")
-MTX_RTSP_URL = os.getenv("MTX_RTSP_URL", "rtsp://127.0.0.1:8554").rstrip("/")
+MEDIASERVER_API_URL = os.getenv(
+    "MEDIASERVER_API_URL", "http://127.0.0.1:9997"
+).rstrip("/")
+MEDIASERVER_RTSP_URL = os.getenv(
+    "MEDIASERVER_RTSP_URL", "rtsp://127.0.0.1:8554"
+).rstrip("/")
 VIDEOS_DIR = Path(os.getenv("VIDEOS_DIR", "/videos"))
 PUBLIC_HOST = os.getenv("PUBLIC_HOST", "localhost")
 WEBRTC_PORT = int(os.getenv("WEBRTC_PORT", "8889"))

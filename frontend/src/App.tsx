@@ -5,6 +5,10 @@ import {
   fetchVideos,
   restartAllStreams,
   restartStream,
+  startAllStreams,
+  startStream,
+  stopAllStreams,
+  stopStream,
   uploadVideo,
 } from "./api";
 import BrowserPreview from "./BrowserPreview";
@@ -21,21 +25,28 @@ function formatDate(iso: string): string {
   return new Date(iso).toLocaleString("tr-TR");
 }
 
-function statusBadge(status: string) {
+function statusBadge(status: string, fileExists: boolean) {
+  if (!fileExists || status === "missing") {
+    return <span className="badge badge-missing">Dosya yok</span>;
+  }
   const cls =
     status === "streaming"
       ? "badge-streaming"
       : status === "ready"
         ? "badge-ready"
-        : "badge-idle";
+        : status === "stopped"
+          ? "badge-stopped"
+          : "badge-idle";
   const label =
     status === "streaming"
       ? "Yayında"
       : status === "ready"
         ? "Hazır"
-        : status === "unknown"
-          ? "Bilinmiyor"
-          : "Beklemede";
+        : status === "stopped"
+          ? "Durduruldu"
+          : status === "unknown"
+            ? "Bilinmiyor"
+            : "Beklemede";
   return <span className={`badge ${cls}`}>{label}</span>;
 }
 
@@ -53,24 +64,34 @@ export default function App() {
   const [previewId, setPreviewId] = useState<string | null>(null);
   const [restartingId, setRestartingId] = useState<string | null>(null);
   const [restartingAll, setRestartingAll] = useState(false);
+  const [stoppingId, setStoppingId] = useState<string | null>(null);
+  const [stoppingAll, setStoppingAll] = useState(false);
+  const [startingAll, setStartingAll] = useState(false);
+  const streamBusy = restartingAll || stoppingAll || startingAll;
   const inputRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
     try {
       const health = await fetch("/api/health").then((r) => r.json());
-      if (health.mediamtx === "disconnected") {
+      if (health.mediaserver === "disconnected") {
         setError(
           health.error ||
-            "MediaMTX API bağlantısı yok. docker compose logs mediamtx kontrol edin.",
+            "Media Server API bağlantısı yok. docker compose logs engine kontrol edin.",
         );
       }
       const list = await fetchVideos();
       setVideos(list);
-      if (health.mediamtx === "connected") {
-        const missing = list.filter((v) => v.status === "unknown").length;
-        if (missing > 0) {
+      if (health.mediaserver === "connected") {
+        const noFile = list.filter((v) => !v.file_exists).length;
+        const unknown = list.filter((v) => v.file_exists && v.status === "unknown").length;
+        if (noFile > 0) {
           setError(
-            `${missing} video MediaMTX ile senkron değil; sayfayı yenileyin veya API'yi yeniden başlatın.`,
+            `${noFile} kayıt var ama video dosyası diskte yok (data/videos). ` +
+              "Dosyayı yeniden yükleyin veya listeden Sil ile kaldırın.",
+          );
+        } else if (unknown > 0) {
+          setError(
+            `${unknown} video Media Server ile senkron değil; sayfayı yenileyin veya API'yi yeniden başlatın.`,
           );
         } else {
           setError(null);
@@ -116,14 +137,25 @@ export default function App() {
     }
   };
 
-  const onRestart = async (id: string) => {
+  const onStartOrRestart = async (video: Video) => {
+    const starting = video.status === "stopped";
     try {
       setError(null);
-      setRestartingId(id);
-      await restartStream(id);
+      setRestartingId(video.id);
+      if (starting) {
+        await startStream(video.id);
+      } else {
+        await restartStream(video.id);
+      }
       await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Yayin yeniden baslatilamadi");
+      setError(
+        e instanceof Error
+          ? e.message
+          : starting
+            ? "Yayin baslatilamadi"
+            : "Yayin yeniden baslatilamadi",
+      );
     } finally {
       setRestartingId(null);
     }
@@ -144,11 +176,57 @@ export default function App() {
     }
   };
 
-  const previewVideo = videos.find((v) => v.id === previewId);
+  const onStop = async (id: string) => {
+    try {
+      setError(null);
+      setStoppingId(id);
+      await stopStream(id);
+      if (previewId === id) setPreviewId(null);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Yayin durdurulamadi");
+    } finally {
+      setStoppingId(null);
+    }
+  };
+
+  const onStopAll = async () => {
+    try {
+      setError(null);
+      setStoppingAll(true);
+      await stopAllStreams();
+      setPreviewId(null);
+      await load();
+    } catch (e) {
+      setError(
+        e instanceof Error ? e.message : "Tum yayinlar durdurulamadi",
+      );
+    } finally {
+      setStoppingAll(false);
+    }
+  };
+
+  const onStartAll = async () => {
+    try {
+      setError(null);
+      setStartingAll(true);
+      await startAllStreams();
+      await load();
+    } catch (e) {
+      setError(
+        e instanceof Error ? e.message : "Tum yayinlar baslatilamadi",
+      );
+    } finally {
+      setStartingAll(false);
+    }
+  };
+
+  const previewVideo = videos.find((v) => v.id === previewId && v.file_exists);
+  const playableCount = videos.filter((v) => v.file_exists).length;
 
   return (
     <>
-      <h1>MediaMTX Video Panel</h1>
+      <h1>Media Server</h1>
       <p className="subtitle">
         Video yükleyin; tarayıcıda WebRTC, VLC&apos;de RTSP ile izleyin.
       </p>
@@ -205,14 +283,34 @@ export default function App() {
           <h2 style={{ marginTop: 0, fontSize: "1.1rem", marginBottom: 0 }}>
             Videolarım
           </h2>
-          <button
-            type="button"
-            className="btn btn-ghost"
-            onClick={() => void onRestartAll()}
-            disabled={restartingAll || loading || videos.length === 0}
-          >
-            {restartingAll ? "Tumu yeniden baslatiliyor..." : "Tumunu yeniden baslat"}
-          </button>
+          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => void onStopAll()}
+              disabled={streamBusy || loading || playableCount === 0}
+            >
+              {stoppingAll ? "Tumu durduruluyor..." : "Tumunu durdur"}
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => void onStartAll()}
+              disabled={streamBusy || loading || playableCount === 0}
+            >
+              {startingAll ? "Tumu baslatiliyor..." : "Tumunu baslat"}
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => void onRestartAll()}
+              disabled={streamBusy || loading || playableCount === 0}
+            >
+              {restartingAll
+                ? "Tumu yeniden baslatiliyor..."
+                : "Tumunu yeniden baslat"}
+            </button>
+          </div>
         </div>
         {loading ? (
           <p className="empty">Yükleniyor…</p>
@@ -230,21 +328,32 @@ export default function App() {
               </tr>
             </thead>
             <tbody>
-              {videos.map((v) => (
-                <tr key={v.id}>
+              {videos.map((v) => {
+                const missing = !v.file_exists;
+                return (
+                <tr key={v.id} className={missing ? "row-missing" : undefined}>
                   <td>
                     <strong>{v.title}</strong>
-                    <div className="url-row">
-                      <code>{v.rtsp_url}</code>
-                    </div>
+                    {missing && (
+                      <p className="missing-hint">
+                        Dosya bulunamadı: <code>{v.filename}</code>
+                      </p>
+                    )}
+                    {!missing && (
+                      <div className="url-row">
+                        <code>{v.rtsp_url}</code>
+                      </div>
+                    )}
                   </td>
                   <td>{formatBytes(v.size)}</td>
                   <td>{formatDate(v.created_at)}</td>
-                  <td>{statusBadge(v.status)}</td>
+                  <td>{statusBadge(v.status, v.file_exists)}</td>
                   <td>
                     <button
                       type="button"
                       className="btn btn-primary"
+                      disabled={missing}
+                      title={missing ? "Video dosyası diskte yok" : undefined}
                       onClick={() =>
                         setPreviewId(previewId === v.id ? null : v.id)
                       }
@@ -254,14 +363,41 @@ export default function App() {
                     <button
                       type="button"
                       className="btn btn-ghost"
-                      onClick={() => void onRestart(v.id)}
-                      disabled={restartingId === v.id || restartingAll}
+                      onClick={() => void onStartOrRestart(v)}
+                      disabled={
+                        missing ||
+                        streamBusy ||
+                        restartingId === v.id ||
+                        stoppingId === v.id
+                      }
+                      title={missing ? "Video dosyası diskte yok" : undefined}
                     >
-                      {restartingId === v.id ? "Yeniden baslatiliyor..." : "Yeniden baslat"}
+                      {restartingId === v.id
+                        ? v.status === "stopped"
+                          ? "Baslatiliyor..."
+                          : "Yeniden baslatiliyor..."
+                        : v.status === "stopped"
+                          ? "Baslat"
+                          : "Yeniden baslat"}
                     </button>
                     <button
                       type="button"
                       className="btn btn-ghost"
+                      onClick={() => void onStop(v.id)}
+                      disabled={
+                        missing ||
+                        streamBusy ||
+                        stoppingId === v.id ||
+                        restartingId === v.id
+                      }
+                      title={missing ? "Video dosyası diskte yok" : undefined}
+                    >
+                      {stoppingId === v.id ? "Durduruluyor..." : "Durdur"}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-ghost"
+                      disabled={missing}
                       onClick={() => void copyText(v.rtsp_url)}
                     >
                       RTSP (VLC)
@@ -269,6 +405,7 @@ export default function App() {
                     <button
                       type="button"
                       className="btn btn-ghost"
+                      disabled={missing}
                       onClick={() => void copyText(v.whep_url)}
                     >
                       WHEP
@@ -276,6 +413,7 @@ export default function App() {
                     <button
                       type="button"
                       className="btn btn-ghost"
+                      disabled={missing}
                       onClick={() => window.open(watchPageUrl(v.id), "_blank")}
                     >
                       Yeni sekme
@@ -289,7 +427,8 @@ export default function App() {
                     </button>
                   </td>
                 </tr>
-              ))}
+              );
+              })}
             </tbody>
           </table>
         )}

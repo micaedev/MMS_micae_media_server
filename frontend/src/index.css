@@ -112,6 +112,37 @@ th {
   color: #bb86fc;
 }
 
+.badge-missing {
+  background: #4a3030;
+  color: #f28b82;
+}
+
+.badge-stopped {
+  background: #2a2e38;
+  color: #9aa0a6;
+}
+
+.row-missing {
+  opacity: 0.85;
+}
+
+.row-missing td {
+  background: #1a1518;
+}
+
+.missing-hint {
+  margin: 0.35rem 0 0;
+  font-size: 0.8rem;
+  color: #f28b82;
+}
+
+.missing-hint code {
+  font-size: 0.75rem;
+  background: #0f1117;
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+}
+
 .btn {
   border: none;
   border-radius: 8px;

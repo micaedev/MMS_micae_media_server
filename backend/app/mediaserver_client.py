@@ -4,30 +4,26 @@ import time
 
 import httpx
 
-from app.config import MTX_API_URL, MTX_RTSP_URL
+from app.config import MEDIASERVER_API_URL, MEDIASERVER_RTSP_URL
 
 logger = logging.getLogger(__name__)
 
 
-class MediaMTXError(Exception):
+class MediaServerError(Exception):
     def __init__(self, message: str, status_code: int | None = None):
         super().__init__(message)
         self.status_code = status_code
 
 
-class MediaMTXClient:
-    def __init__(self, base_url: str = MTX_API_URL):
+class MediaServerClient:
+    def __init__(self, base_url: str = MEDIASERVER_API_URL):
         self.base_url = base_url.rstrip("/")
 
     def _build_publish_command(self, file_path: str) -> str:
-        # WebRTC tarayıcıları: baseline H.264, B-frame yok (MediaMTX dokümantasyonu)
         return (
             f"ffmpeg -hide_banner -loglevel error -re -stream_loop -1 "
             f"-i {file_path} "
-            f"-map 0:v:0 "
-            f"-c:v libx264 -preset veryfast -tune zerolatency "
-            f"-profile:v baseline -level 4.0 -pix_fmt yuv420p -g 32 -bf 0 "
-            f"-an "
+            f"-map 0:v:0 -c:v copy -bsf:v h264_mp4toannexb -an "
             f"-f rtsp -rtsp_transport tcp "
             f"rtsp://127.0.0.1:$RTSP_PORT/$MTX_PATH"
         )
@@ -51,7 +47,7 @@ class MediaMTXClient:
             except httpx.RequestError as exc:
                 last_error = exc
                 logger.warning(
-                    "MediaMTX isteği başarısız (%s %s), deneme %s/%s: %s",
+                    "Media Server isteği başarısız (%s %s), deneme %s/%s: %s",
                     method,
                     path,
                     attempt + 1,
@@ -61,16 +57,16 @@ class MediaMTXClient:
                 if attempt + 1 < retries:
                     await asyncio.sleep(1.5 * (attempt + 1))
 
-        raise MediaMTXError(
-            f"MediaMTX'e bağlanılamadı ({self.base_url}). "
-            f"mediamtx konteyneri çalışıyor mu? Detay: {last_error}"
+        raise MediaServerError(
+            f"Media Server API'ye bağlanılamadı ({self.base_url}). "
+            f"mediaserver konteyneri çalışıyor mu? Detay: {last_error}"
         ) from last_error
 
     async def check_connection(self) -> None:
         response = await self._request("GET", "/v3/config/global/get", retries=5)
         if response.status_code != 200:
-            raise MediaMTXError(
-                f"MediaMTX API yanıt vermiyor: {response.status_code} {response.text}",
+            raise MediaServerError(
+                f"Media Server API yanıt vermiyor: {response.status_code} {response.text}",
                 status_code=response.status_code,
             )
 
@@ -86,20 +82,18 @@ class MediaMTXClient:
         if await self.path_configured(path_name):
             try:
                 await self.delete_path(path_name)
-            except MediaMTXError:
+            except MediaServerError:
                 pass
         await self.add_path(path_name, file_path)
 
     async def ensure_path(self, path_name: str, file_path: str) -> None:
-        """Path yoksa ekler; varsa dokunmaz (gereksiz config reload önlenir)."""
         if await self.path_configured(path_name):
             return
-        logger.info("MediaMTX path oluşturuluyor: %s", path_name)
+        logger.info("Media Server path oluşturuluyor: %s", path_name)
         await self.add_path(path_name, file_path)
 
     async def add_path(self, path_name: str, file_path: str) -> None:
         cmd = self._build_publish_command(file_path)
-        # Yalnızca runOnInit: çift FFmpeg (runOnReady+runOnDemand) ve WebRTC yarışı önlenir
         body = {
             "runOnInit": cmd,
             "runOnInitRestart": True,
@@ -110,7 +104,7 @@ class MediaMTXClient:
             json=body,
         )
         if response.status_code not in (200, 201):
-            raise MediaMTXError(
+            raise MediaServerError(
                 f"Path eklenemedi ({response.status_code}): {response.text}",
                 status_code=response.status_code,
             )
@@ -121,14 +115,13 @@ class MediaMTXClient:
             f"/v3/config/paths/delete/{path_name}",
         )
         if response.status_code not in (200, 204):
-            raise MediaMTXError(
+            raise MediaServerError(
                 f"Path silinemedi ({response.status_code}): {response.text}",
                 status_code=response.status_code,
             )
 
     async def wake_publisher(self, path_name: str, timeout_sec: float = 30.0) -> dict:
-        """RTSP okuyucu açarak runOnDemand/runOnReady yayınını başlatır; ready olana kadar bekler."""
-        rtsp_url = f"{MTX_RTSP_URL}/{path_name}"
+        rtsp_url = f"{MEDIASERVER_RTSP_URL}/{path_name}"
         probe = await asyncio.create_subprocess_exec(
             "ffprobe",
             "-hide_banner",
@@ -165,13 +158,13 @@ class MediaMTXClient:
     async def get_path_status(self, path_name: str) -> dict:
         try:
             response = await self._request("GET", f"/v3/paths/get/{path_name}", retries=1)
-        except MediaMTXError:
+        except MediaServerError:
             return {"ready": False, "readers": [], "exists": False, "tracks": []}
 
         if response.status_code == 404:
             return {"ready": False, "readers": [], "exists": False, "tracks": []}
         if response.status_code != 200:
-            raise MediaMTXError(
+            raise MediaServerError(
                 f"Path durumu alınamadı ({response.status_code}): {response.text}",
                 status_code=response.status_code,
             )

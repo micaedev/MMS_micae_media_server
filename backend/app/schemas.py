@@ -8,7 +8,7 @@ class VideoOut(BaseModel):
     title: str
     filename: str
     size: int
-    mtx_path: str
+    stream_path: str
     created_at: datetime
     rtsp_url: str
     webrtc_url: str
@@ -16,6 +16,7 @@ class VideoOut(BaseModel):
     watch_url: str
     hls_url: str
     status: str = "idle"
+    file_exists: bool = True
 
     model_config = {"from_attributes": True}
 

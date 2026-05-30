@@ -13,7 +13,7 @@ class Video(Base):
     title: Mapped[str] = mapped_column(String(512))
     filename: Mapped[str] = mapped_column(String(512))
     size: Mapped[int] = mapped_column(Integer)
-    mtx_path: Mapped[str] = mapped_column(String(128))
+    stream_path: Mapped[str] = mapped_column(String(128))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),

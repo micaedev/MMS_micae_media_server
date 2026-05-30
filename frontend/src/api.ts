@@ -3,7 +3,7 @@ export type Video = {
   title: string;
   filename: string;
   size: number;
-  mtx_path: string;
+  stream_path: string;
   created_at: string;
   rtsp_url: string;
   webrtc_url: string;
@@ -11,6 +11,7 @@ export type Video = {
   watch_url: string;
   hls_url: string;
   status: string;
+  file_exists: boolean;
 };
 
 function parseApiError(body: unknown, fallback: string): string {
@@ -117,6 +118,30 @@ export async function restartAllStreams(): Promise<void> {
   if (!res.ok) {
     const body = await res.json().catch(() => null);
     throw new Error(parseApiError(body, "Tum yayinlar yeniden baslatilamadi"));
+  }
+}
+
+export async function stopStream(id: string): Promise<void> {
+  const res = await fetch(`/api/videos/${id}/stop`, { method: "POST" });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(parseApiError(body, "Yayin durdurulamadi"));
+  }
+}
+
+export async function stopAllStreams(): Promise<void> {
+  const res = await fetch("/api/videos/stop-all", { method: "POST" });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(parseApiError(body, "Tum yayinlar durdurulamadi"));
+  }
+}
+
+export async function startAllStreams(): Promise<void> {
+  const res = await fetch("/api/videos/start-all", { method: "POST" });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(parseApiError(body, "Tum yayinlar baslatilamadi"));
   }
 }
 

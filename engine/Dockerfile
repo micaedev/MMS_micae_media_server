@@ -2,8 +2,8 @@ FROM alpine:3.20
 
 RUN apk add --no-cache ffmpeg ca-certificates curl
 
-COPY --from=bluenviron/mediamtx:latest /mediamtx /mediamtx
-COPY mediamtx.yml.template /mediamtx.yml.template
+COPY --from=bluenviron/mediamtx:latest /mediamtx /mediaserver
+COPY mediaserver.yml.template /mediaserver.yml.template
 COPY docker-entrypoint.sh /docker-entrypoint.sh
 RUN chmod +x /docker-entrypoint.sh
 

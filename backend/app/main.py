@@ -19,11 +19,11 @@ from app.config import (
     WEBRTC_PORT,
 )
 from app.database import Base, SessionLocal, engine, get_db
-from app.mtx_client import MediaMTXClient, MediaMTXError
+from app.mediaserver_client import MediaServerClient, MediaServerError
 from app.schemas import VideoOut, VideoStatusOut
 
 logger = logging.getLogger(__name__)
-mtx = MediaMTXClient()
+media_server = MediaServerClient()
 
 
 @asynccontextmanager
@@ -32,29 +32,17 @@ async def lifespan(_app: FastAPI):
     os.chmod(VIDEOS_DIR, 0o777)
     Base.metadata.create_all(bind=engine)
     try:
-        await mtx.check_connection()
-        logger.info("MediaMTX API bağlantısı OK: %s", mtx.base_url)
-        db = SessionLocal()
-        try:
-            videos = db.query(models.Video).all()
-            for video in videos:
-                try:
-                    await mtx.ensure_path(
-                        video.mtx_path,
-                        f"/videos/{video.filename}",
-                    )
-                except MediaMTXError as exc:
-                    logger.error("Path senkron hatası %s: %s", video.id, exc)
-            if videos:
-                logger.info("MediaMTX path senkronu: %s video", len(videos))
-        finally:
-            db.close()
-    except MediaMTXError as exc:
-        logger.error("MediaMTX API başlangıçta erişilemedi: %s", exc)
+        await media_server.check_connection()
+        logger.info("Media Server API bağlantısı OK: %s", media_server.base_url)
+        logger.info(
+            "Yayinlar otomatik baslatilmaz; Baslat / Yeniden baslat veya izleme ile acilir.",
+        )
+    except MediaServerError as exc:
+        logger.error("Media Server API başlangıçta erişilemedi: %s", exc)
     yield
 
 
-app = FastAPI(title="MediaMTX Web API", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="Media Server Web API", version="1.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -84,7 +72,38 @@ def _format_size(num_bytes: int) -> str:
     return f"{mb:.0f} MB"
 
 
-def _status_label(ready: bool, reader_count: int) -> str:
+def _video_file_path(video: models.Video) -> Path:
+    return VIDEOS_DIR / video.filename
+
+
+def _engine_media_path(video: models.Video) -> str:
+    return f"/videos/{video.filename}"
+
+
+def _file_exists(video: models.Video) -> bool:
+    return _video_file_path(video).is_file()
+
+
+def _require_video_file(video: models.Video) -> None:
+    if not _file_exists(video):
+        raise HTTPException(
+            404,
+            f"Video dosyası bulunamadı ({video.filename}). "
+            "Dosya silinmiş olabilir; listeden kaldırın.",
+        )
+
+
+async def _stop_mediaserver_path(video: models.Video) -> None:
+    try:
+        await media_server.delete_path(video.stream_path)
+    except MediaServerError as e:
+        if e.status_code != 404:
+            raise
+
+
+def _status_label(ready: bool, reader_count: int, *, path_exists: bool = True) -> str:
+    if not path_exists:
+        return "stopped"
     if reader_count > 0:
         return "streaming"
     if ready:
@@ -92,14 +111,23 @@ def _status_label(ready: bool, reader_count: int) -> str:
     return "idle"
 
 
-def _to_video_out(video: models.Video, status: str = "idle") -> VideoOut:
+def _to_video_out(
+    video: models.Video,
+    status: str = "idle",
+    *,
+    file_exists: bool | None = None,
+) -> VideoOut:
+    exists = _file_exists(video) if file_exists is None else file_exists
+    if not exists:
+        status = "missing"
+
     rtsp, watch, whep, page, hls = _stream_urls(video.id)
     return VideoOut(
         id=video.id,
         title=video.title,
         filename=video.filename,
         size=video.size,
-        mtx_path=video.mtx_path,
+        stream_path=video.stream_path,
         created_at=video.created_at,
         rtsp_url=rtsp,
         webrtc_url=watch,
@@ -107,24 +135,31 @@ def _to_video_out(video: models.Video, status: str = "idle") -> VideoOut:
         watch_url=page,
         hls_url=hls,
         status=status,
+        file_exists=exists,
     )
 
 
 @app.get("/api/health")
 async def health():
     try:
-        await mtx.check_connection()
-        return {"ok": True, "mediamtx": "connected"}
-    except MediaMTXError as exc:
-        return {"ok": False, "mediamtx": "disconnected", "error": str(exc)}
+        await media_server.check_connection()
+        return {"ok": True, "mediaserver": "connected"}
+    except MediaServerError as exc:
+        return {"ok": False, "mediaserver": "disconnected", "error": str(exc)}
 
 
 async def _video_with_status(video: models.Video) -> VideoOut:
-    await mtx.ensure_path(video.mtx_path, f"/videos/{video.filename}")
+    if not _file_exists(video):
+        return _to_video_out(video, file_exists=False)
+
     try:
-        st = await mtx.get_path_status(video.mtx_path)
-        status = _status_label(st["ready"], len(st["readers"]))
-    except MediaMTXError:
+        st = await media_server.get_path_status(video.stream_path)
+        status = _status_label(
+            st["ready"],
+            len(st["readers"]),
+            path_exists=st.get("exists", False),
+        )
+    except MediaServerError:
         status = "unknown"
     return _to_video_out(video, status)
 
@@ -136,7 +171,7 @@ async def list_videos(db: Session = Depends(get_db)):
     for video in videos:
         try:
             result.append(await _video_with_status(video))
-        except MediaMTXError:
+        except MediaServerError:
             result.append(_to_video_out(video, "unknown"))
     return result
 
@@ -145,20 +180,87 @@ async def list_videos(db: Session = Depends(get_db)):
 async def sync_all_paths(db: Session = Depends(get_db)):
     videos = db.query(models.Video).all()
     synced = 0
+    skipped = 0
     for video in videos:
-        await mtx.reload_path(video.mtx_path, f"/videos/{video.filename}")
+        if not _file_exists(video):
+            skipped += 1
+            continue
+        await media_server.reload_path(
+            video.stream_path, _engine_media_path(video)
+        )
         synced += 1
-    return {"synced": synced, "note": "Path'ler runOnInit ile yeniden oluşturuldu"}
+    return {
+        "synced": synced,
+        "skipped_missing": skipped,
+        "note": "Path'ler runOnInit ile yeniden oluşturuldu",
+    }
 
 
 @app.post("/api/videos/restart-all")
 async def restart_all_streams(db: Session = Depends(get_db)):
     videos = db.query(models.Video).all()
     restarted = 0
+    skipped = 0
     for video in videos:
-        await mtx.reload_path(video.mtx_path, f"/videos/{video.filename}")
+        if not _file_exists(video):
+            skipped += 1
+            continue
+        await media_server.reload_path(
+            video.stream_path, _engine_media_path(video)
+        )
         restarted += 1
-    return {"restarted": restarted, "note": "Tum yayinlar yeniden baslatildi"}
+    return {
+        "restarted": restarted,
+        "skipped_missing": skipped,
+        "note": "Tum yayinlar yeniden baslatildi",
+    }
+
+
+@app.post("/api/videos/stop-all")
+async def stop_all_streams(db: Session = Depends(get_db)):
+    videos = db.query(models.Video).all()
+    stopped = 0
+    skipped = 0
+    for video in videos:
+        if not _file_exists(video):
+            skipped += 1
+            continue
+        await _stop_mediaserver_path(video)
+        stopped += 1
+    return {
+        "stopped": stopped,
+        "skipped_missing": skipped,
+        "note": "Tum yayinlar durduruldu",
+    }
+
+
+@app.post("/api/videos/start-all")
+async def start_all_streams(db: Session = Depends(get_db)):
+    videos = db.query(models.Video).all()
+    started = 0
+    already = 0
+    skipped = 0
+    for video in videos:
+        if not _file_exists(video):
+            skipped += 1
+            continue
+        if await media_server.path_configured(video.stream_path):
+            already += 1
+            continue
+        try:
+            await media_server.ensure_path(
+                video.stream_path,
+                _engine_media_path(video),
+            )
+        except MediaServerError as e:
+            raise HTTPException(502, str(e)) from e
+        started += 1
+    return {
+        "started": started,
+        "already_running": already,
+        "skipped_missing": skipped,
+        "note": "Durdurulmus yayinlar baslatildi",
+    }
 
 
 @app.post("/api/videos", response_model=VideoOut, status_code=201)
@@ -205,10 +307,10 @@ async def upload_video(
 
     container_path = f"/videos/{stored_name}"
     try:
-        await mtx.add_path(video_id, container_path)
-    except MediaMTXError as e:
+        await media_server.add_path(video_id, container_path)
+    except MediaServerError as e:
         dest.unlink(missing_ok=True)
-        logger.error("MediaMTX path eklenemedi: %s", e)
+        logger.error("Media Server path eklenemedi: %s", e)
         raise HTTPException(502, str(e)) from e
 
     title = Path(file.filename).stem
@@ -217,7 +319,7 @@ async def upload_video(
         title=title,
         filename=stored_name,
         size=size,
-        mtx_path=video_id,
+        stream_path=video_id,
     )
     db.add(video)
     db.commit()
@@ -230,20 +332,47 @@ async def restart_video_stream(video_id: str, db: Session = Depends(get_db)):
     video = db.get(models.Video, video_id)
     if not video:
         raise HTTPException(404, "Video bulunamadi")
+    _require_video_file(video)
 
     try:
-        await mtx.reload_path(video.mtx_path, f"/videos/{video.filename}")
-        st = await mtx.wake_publisher(video.mtx_path, timeout_sec=35.0)
-    except MediaMTXError as e:
+        await media_server.reload_path(
+            video.stream_path, _engine_media_path(video)
+        )
+        st = await media_server.wake_publisher(video.stream_path, timeout_sec=35.0)
+    except MediaServerError as e:
         raise HTTPException(502, str(e)) from e
 
     reader_count = len(st["readers"])
     return {
         "id": video_id,
-        "status": _status_label(st["ready"], reader_count),
+        "status": _status_label(
+            st["ready"],
+            reader_count,
+            path_exists=st.get("exists", True),
+        ),
         "ready": st["ready"],
         "tracks": st.get("tracks", []),
         "message": "Yayin yeniden baslatildi",
+    }
+
+
+@app.post("/api/videos/{video_id}/stop")
+async def stop_video_stream(video_id: str, db: Session = Depends(get_db)):
+    video = db.get(models.Video, video_id)
+    if not video:
+        raise HTTPException(404, "Video bulunamadi")
+    _require_video_file(video)
+
+    try:
+        await _stop_mediaserver_path(video)
+    except MediaServerError as e:
+        raise HTTPException(502, str(e)) from e
+
+    return {
+        "id": video_id,
+        "status": "idle",
+        "ready": False,
+        "message": "Yayin durduruldu",
     }
 
 
@@ -252,16 +381,23 @@ async def start_video_stream(video_id: str, db: Session = Depends(get_db)):
     video = db.get(models.Video, video_id)
     if not video:
         raise HTTPException(404, "Video bulunamadı")
+    _require_video_file(video)
 
     try:
-        await mtx.ensure_path(video.mtx_path, f"/videos/{video.filename}")
-        st = await mtx.wake_publisher(video.mtx_path, timeout_sec=35.0)
-    except MediaMTXError as e:
+        await media_server.ensure_path(
+            video.stream_path, _engine_media_path(video)
+        )
+        st = await media_server.wake_publisher(video.stream_path, timeout_sec=35.0)
+    except MediaServerError as e:
         raise HTTPException(502, str(e)) from e
 
     reader_count = len(st["readers"])
     return {
-        "status": _status_label(st["ready"], reader_count),
+        "status": _status_label(
+            st["ready"],
+            reader_count,
+            path_exists=st.get("exists", True),
+        ),
         "ready": st["ready"],
         "tracks": st.get("tracks", []),
         "hint": (
@@ -277,10 +413,18 @@ async def video_status(video_id: str, db: Session = Depends(get_db)):
     video = db.get(models.Video, video_id)
     if not video:
         raise HTTPException(404, "Video bulunamadı")
+    if not _file_exists(video):
+        return VideoStatusOut(
+            id=video_id,
+            ready=False,
+            reader_count=0,
+            status="missing",
+            tracks=[],
+        )
 
     try:
-        st = await mtx.get_path_status(video.mtx_path)
-    except MediaMTXError as e:
+        st = await media_server.get_path_status(video.stream_path)
+    except MediaServerError as e:
         raise HTTPException(502, str(e)) from e
 
     reader_count = len(st["readers"])
@@ -288,7 +432,11 @@ async def video_status(video_id: str, db: Session = Depends(get_db)):
         id=video_id,
         ready=st["ready"],
         reader_count=reader_count,
-        status=_status_label(st["ready"], reader_count),
+        status=_status_label(
+            st["ready"],
+            reader_count,
+            path_exists=st.get("exists", False),
+        ),
         tracks=st.get("tracks", []),
     )
 
@@ -300,12 +448,12 @@ async def delete_video(video_id: str, db: Session = Depends(get_db)):
         raise HTTPException(404, "Video bulunamadı")
 
     try:
-        await mtx.delete_path(video.mtx_path)
-    except MediaMTXError as e:
+        await media_server.delete_path(video.stream_path)
+    except MediaServerError as e:
         if e.status_code != 404:
             raise HTTPException(502, str(e)) from e
 
-    file_path = VIDEOS_DIR / video.filename
+    file_path = _video_file_path(video)
     file_path.unlink(missing_ok=True)
     db.delete(video)
     db.commit()

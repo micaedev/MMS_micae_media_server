@@ -1,5 +1,5 @@
 {
-  "name": "mediamtx-web-frontend",
+  "name": "mediaserver-frontend",
   "private": true,
   "version": "1.0.0",
   "description": "MediaMTX Video Panel — web UI",
