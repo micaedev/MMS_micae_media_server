@@ -15,6 +15,7 @@ import AppNav from "../components/AppNav";
 import StorageLocationSetup from "../components/StorageLocationSetup";
 import StatusBadge from "../components/StatusBadge";
 import { useVideos } from "../hooks/useVideos";
+import VideoMediaCell from "../components/VideoMediaCell";
 import { formatBytes, formatDate } from "../utils/format";
 
 export default function SetupPage() {
@@ -198,6 +199,7 @@ export default function SetupPage() {
             <thead>
               <tr>
                 <th>Başlık</th>
+                <th>Medya</th>
                 <th>Disk</th>
                 <th>Boyut</th>
                 <th>Durum</th>
@@ -216,6 +218,9 @@ export default function SetupPage() {
                           Dosya yok: <code>{v.filename}</code>
                         </p>
                       )}
+                    </td>
+                    <td>
+                      <VideoMediaCell video={v} />
                     </td>
                     <td>
                       <span className="storage-tag">

@@ -4,9 +4,10 @@ import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import httpx
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app import models
@@ -23,6 +24,7 @@ from app.database import Base, SessionLocal, engine, get_db
 from app.mediaserver_client import MediaServerClient, MediaServerError
 from app.migrate import run_migrations
 from app import storage
+from app.probe import probe_media
 from app import thumbnails
 from app.schemas import (
     BrowseOut,
@@ -50,6 +52,7 @@ async def lifespan(_app: FastAPI):
         for root in storage.BROWSE_ROOTS.values():
             if root.path.is_dir():
                 os.chmod(root.path, 0o777)
+        thumbnails.ensure_dir()
     finally:
         db.close()
     VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
@@ -57,9 +60,27 @@ async def lifespan(_app: FastAPI):
     try:
         await media_server.check_connection()
         logger.info("Media Server API bağlantısı OK: %s", media_server.base_url)
-        logger.info(
-            "Yayinlar otomatik baslatilmaz; Baslat / Yeniden baslat veya izleme ile acilir.",
-        )
+        db = SessionLocal()
+        try:
+            synced = 0
+            for video in db.query(models.Video).all():
+                if not _file_exists(video, db):
+                    continue
+                try:
+                    await media_server.reload_path(
+                        _mtx_path(video),
+                        _engine_media_path(video, db),
+                    )
+                    synced += 1
+                except MediaServerError as exc:
+                    logger.warning("Path senkron hatası %s: %s", video.id, exc)
+            if synced:
+                logger.info(
+                    "Media Server path komutlari guncellendi (%s video)",
+                    synced,
+                )
+        finally:
+            db.close()
     except MediaServerError as exc:
         logger.error("Media Server API başlangıçta erişilemedi: %s", exc)
     yield
@@ -147,19 +168,41 @@ def _status_label(ready: bool, reader_count: int, *, path_exists: bool = True) -
     return "idle"
 
 
+def _apply_probe_to_video(video: models.Video, path: Path, db: Session) -> None:
+    info = probe_media(path)
+    video.video_codec = info.video_codec
+    video.video_fps = info.video_fps
+    video.has_audio = info.has_audio
+    db.add(video)
+    db.commit()
+    db.refresh(video)
+
+
+def _ensure_video_probe(video: models.Video, db: Session) -> None:
+    if video.video_codec is not None:
+        return
+    if not _file_exists(video, db):
+        return
+    _apply_probe_to_video(video, _video_file_path(video, db), db)
+
+
 def _to_video_out(
     video: models.Video,
     status: str = "idle",
     *,
     db: Session,
     file_exists: bool | None = None,
+    probe: bool = True,
 ) -> VideoOut:
     exists = _file_exists(video, db) if file_exists is None else file_exists
     if not exists:
         status = "missing"
+    elif probe:
+        _ensure_video_probe(video, db)
 
     rtsp, watch, whep, page, hls = _stream_urls(video.id)
     vol = _video_volume(video, db)
+    thumb_url = f"/api/videos/{video.id}/thumbnail" if exists else ""
     return VideoOut(
         id=video.id,
         title=video.title,
@@ -176,7 +219,10 @@ def _to_video_out(
         hls_url=hls,
         status=status,
         file_exists=exists,
-        thumbnail_url=f"/api/videos/{video.id}/thumbnail" if exists else "",
+        video_codec=video.video_codec,
+        video_fps=video.video_fps,
+        has_audio=video.has_audio,
+        thumbnail_url=thumb_url,
     )
 
 
@@ -304,6 +350,48 @@ async def list_videos(db: Session = Depends(get_db)):
         except MediaServerError:
             result.append(_to_video_out(video, "unknown", db=db))
     return result
+
+
+@app.post("/api/videos/refresh-media-info")
+async def refresh_media_info(db: Session = Depends(get_db)):
+    """Medya bilgisini sıfırlayıp yeniden ffprobe ile doldurur."""
+    videos = db.query(models.Video).all()
+    reset = 0
+    probed = 0
+    for video in videos:
+        if not _file_exists(video, db):
+            continue
+        video.video_codec = None
+        video.video_fps = None
+        video.has_audio = None
+        db.add(video)
+        reset += 1
+    db.commit()
+    thumbs = 0
+    thumb_errors: list[dict[str, str]] = []
+    for video in videos:
+        if not _file_exists(video, db):
+            continue
+        _ensure_video_probe(video, db)
+        probed += 1
+        thumbnails.delete_thumbnail(video.id)
+        path = _video_file_path(video, db)
+        if thumbnails.generate_thumbnail(path, video.id, force=True):
+            thumbs += 1
+        elif len(thumb_errors) < 5:
+            thumb_errors.append(
+                {"id": video.id, "path": str(path), "title": video.title}
+            )
+    return {
+        "reset": reset,
+        "probed": probed,
+        "thumbnails": thumbs,
+        "thumbnail_errors": thumb_errors,
+        "hint": (
+            "thumbnails 0 ise: docker compose logs api | grep thumbnail "
+            "ve docker compose exec api ffmpeg -i /videos/DOSYA.mp4 -frames:v 1 /tmp/t.jpg"
+        ),
+    }
 
 
 @app.post("/api/videos/sync")
@@ -438,10 +526,7 @@ async def upload_video(
         dest.unlink(missing_ok=True)
         raise HTTPException(500, f"Dosya yazılamadı: {exc}") from exc
 
-    try:
-        await thumbnails.generate_thumbnail(dest)
-    except Exception as exc:
-        logger.warning("Thumbnail atlanadi (yukleme): %s", exc)
+    probe = probe_media(dest)
 
     container_path = f"{vol.container_path}/{stored_name}"
     try:
@@ -460,11 +545,15 @@ async def upload_video(
         size=size,
         stream_path=video_id,
         storage_id=vol.id,
+        video_codec=probe.video_codec,
+        video_fps=probe.video_fps,
+        has_audio=probe.has_audio,
     )
     db.add(video)
     db.commit()
     db.refresh(video)
-    return _to_video_out(video, db=db)
+    thumbnails.generate_thumbnail(dest, video_id)
+    return _to_video_out(video, db=db, probe=False)
 
 
 @app.post("/api/videos/{video_id}/restart")
@@ -529,7 +618,7 @@ async def start_video_stream(video_id: str, db: Session = Depends(get_db)):
     try:
         path = _mtx_path(video)
         await media_server.reload_path(path, _engine_media_path(video, db))
-        st = await media_server.wake_publisher(path, timeout_sec=45.0)
+        st = await media_server.wake_publisher(path, timeout_sec=120.0)
     except MediaServerError as e:
         raise HTTPException(502, str(e)) from e
 
@@ -547,29 +636,124 @@ async def start_video_stream(video_id: str, db: Session = Depends(get_db)):
         "hint": (
             "Yayın hazır; tarayıcıda izleyebilirsiniz."
             if st["ready"]
-            else "Yayın henüz hazır değil — Yeniden baslat deneyin."
+            else (
+                "Yayın henüz hazır değil — Yeniden baslat deneyin. "
+                f"Teşhis: GET /api/videos/{video_id}/stream-debug"
+            )
         ),
     }
 
 
-@app.get("/api/videos/{video_id}/thumbnail")
-async def video_thumbnail(video_id: str, db: Session = Depends(get_db)):
+@app.get("/api/videos/{video_id}/stream-debug")
+async def stream_debug(video_id: str, db: Session = Depends(get_db)):
+    """Yayın/port teşhisi — video gelmiyorsa önce bunu kontrol edin."""
     video = db.get(models.Video, video_id)
     if not video:
         raise HTTPException(404, "Video bulunamadı")
-    if not _file_exists(video, db):
-        raise HTTPException(404, "Video dosyası yok")
 
-    video_path = _video_file_path(video, db)
-    thumb_path = await thumbnails.ensure_thumbnail(video_path)
-    if not thumb_path:
-        raise HTTPException(404, "Önizleme karesi üretilemedi")
+    path = _mtx_path(video)
+    engine_file = _engine_media_path(video, db)
+    exists = _file_exists(video, db)
+    configured = False
+    mtx: dict = {"ready": False, "exists": False, "readers": [], "tracks": []}
+    try:
+        configured = await media_server.path_configured(path)
+        mtx = await media_server.get_path_status(path)
+    except MediaServerError as exc:
+        mtx["error"] = str(exc)
 
-    return FileResponse(
-        thumb_path,
-        media_type="image/jpeg",
-        headers={"Cache-Control": "public, max-age=86400"},
+    hls_public = f"http://{PUBLIC_HOST}:{HLS_PORT}/{path}/index.m3u8"
+    hls_proxy_browser = f"http://{PUBLIC_HOST}:3000/hls/{path}/index.m3u8"
+    hls_proxy_docker = (
+        f"http://host.docker.internal:3000/hls/{path}/index.m3u8"
     )
+    hls_ok_public = False
+    hls_ok_proxy = False
+    hls_internal = f"http://host.docker.internal:{HLS_PORT}/{path}/index.m3u8"
+    hls_ok_internal = False
+    hls_errors: dict[str, str] = {}
+    hls_final: dict[str, str] = {}
+    async with httpx.AsyncClient(timeout=12.0, follow_redirects=True) as client:
+        for key, url in (
+            ("direct_8888", hls_public),
+            ("via_panel_nginx", hls_proxy_docker),
+            ("api_to_engine", hls_internal),
+        ):
+            try:
+                r = await client.get(url)
+                ok = r.status_code == 200 and "#EXTM3U" in r.text
+                hls_final[key] = str(r.url)
+                if key == "direct_8888":
+                    hls_ok_public = ok
+                elif key == "via_panel_nginx":
+                    hls_ok_proxy = ok
+                else:
+                    hls_ok_internal = ok
+                if not ok:
+                    if r.status_code == 200 and "#EXTM3U" not in r.text:
+                        hls_errors[key] = (
+                            "HTTP 200 ama M3U8 degil — panel /hls/ redirect "
+                            f"hatasi (final: {r.url})"
+                        )
+                    else:
+                        hls_errors[key] = f"HTTP {r.status_code} (final: {r.url})"
+            except httpx.RequestError as exc:
+                hls_errors[key] = str(exc)
+
+    # API konteynerinden LAN IP:3000 erisimi genelde basarisiz; tarayici URL ayri
+    hls_proxy_lan_note: str | None = None
+    try:
+        async with httpx.AsyncClient(timeout=5.0, follow_redirects=True) as client:
+            r = await client.get(hls_proxy_browser)
+            if r.status_code == 200 and "#EXTM3U" not in r.text:
+                hls_proxy_lan_note = f"LAN panel HTTP 200 ama M3U8 degil (final: {r.url})"
+    except httpx.RequestError as exc:
+        hls_proxy_lan_note = (
+            f"API konteynerinden {PUBLIC_HOST}:3000 erisilemedi ({exc}); "
+            "tarayicidan test edin — bu normal olabilir"
+        )
+
+    safe = os.getenv("MEDIASERVER_WEBRTC_SAFE", "0").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    return {
+        "video_id": video_id,
+        "file_exists": exists,
+        "engine_file": engine_file,
+        "path_configured": configured,
+        "mediaserver": mtx,
+        "publish_mode": "libx264_transcode" if safe else "h264_copy",
+        "ports": {
+            "panel": 3000,
+            "api": 8080,
+            "hls": HLS_PORT,
+            "webrtc": WEBRTC_PORT,
+            "rtsp": RTSP_PORT,
+            "engine_api": 9997,
+        },
+        "urls": {
+            "hls_direct": hls_public,
+            "hls_via_panel": hls_proxy_browser,
+            "webrtc": f"http://{PUBLIC_HOST}:{WEBRTC_PORT}/{path}",
+            "rtsp": f"rtsp://{PUBLIC_HOST}:{RTSP_PORT}/{path}",
+        },
+        "hls_manifest_ok": {
+            "direct_8888": hls_ok_public,
+            "via_panel_nginx": hls_ok_proxy,
+            "api_to_engine": hls_ok_internal,
+        },
+        "hls_via_panel_lan_from_api": hls_proxy_lan_note,
+        "hls_errors": hls_errors,
+        "hls_final_url": hls_final,
+        "checks": [
+            "mediaserver.ready true olmalı",
+            "hls_via_panel veya hls_direct true olmalı",
+            "path_configured true olmalı",
+            "engine yeniden baslatildiysa: POST /api/videos/restart-all",
+        ],
+    }
 
 
 @app.get("/api/videos/{video_id}/status", response_model=VideoStatusOut)
@@ -619,7 +803,28 @@ async def delete_video(video_id: str, db: Session = Depends(get_db)):
 
     file_path = _video_file_path(video, db)
     file_path.unlink(missing_ok=True)
-    thumb = thumbnails.thumbnail_path_for(file_path)
-    thumb.unlink(missing_ok=True)
+    thumbnails.delete_thumbnail(video_id)
     db.delete(video)
     db.commit()
+
+
+@app.get("/api/videos/{video_id}/thumbnail")
+async def video_thumbnail(video_id: str, db: Session = Depends(get_db)):
+    video = db.get(models.Video, video_id)
+    if not video:
+        raise HTTPException(404, "Video bulunamadı")
+    if not _file_exists(video, db):
+        raise HTTPException(404, "Video dosyası yok")
+
+    if not thumbnails.has_thumbnail(video_id):
+        thumbnails.generate_thumbnail(_video_file_path(video, db), video_id)
+
+    path = thumbnails.thumbnail_path(video_id)
+    if not path.is_file():
+        raise HTTPException(404, "Önizleme oluşturulamadı")
+
+    return FileResponse(
+        path,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )

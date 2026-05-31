@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import Hls from "hls.js";
-import { fetchVideoStatus, startStream } from "./api";
+import { fetchStreamDebug, fetchVideoStatus, startStream } from "./api";
 import { hlsDirectUrl, hlsUrl, watchPageUrl } from "./whep";
 
 type Props = {
@@ -8,6 +8,8 @@ type Props = {
   title: string;
   /** API'den gelen HLS URL (PUBLIC_HOST ile) */
   apiHlsUrl?: string;
+  /** API'den gelen WebRTC sayfa URL (.env PUBLIC_HOST) */
+  webrtcUrl?: string;
 };
 
 function sleep(ms: number) {
@@ -23,8 +25,11 @@ async function waitForHlsManifest(
   while (Date.now() < deadline) {
     for (const url of tried) {
       try {
-        const res = await fetch(url, { cache: "no-store" });
-        if (res.ok && (await res.text()).includes("#EXTM3U")) return url;
+        const res = await fetch(url, { cache: "no-store", redirect: "follow" });
+        const text = await res.text();
+        if (res.ok && text.includes("#EXTM3U")) {
+          return res.url;
+        }
       } catch {
         /* retry */
       }
@@ -34,7 +39,12 @@ async function waitForHlsManifest(
   return null;
 }
 
-export default function BrowserPreview({ videoId, title, apiHlsUrl }: Props) {
+export default function BrowserPreview({
+  videoId,
+  title,
+  apiHlsUrl,
+  webrtcUrl: webrtcPageUrl,
+}: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
   const [message, setMessage] = useState("Yayın hazırlanıyor…");
@@ -43,7 +53,7 @@ export default function BrowserPreview({ videoId, title, apiHlsUrl }: Props) {
   const [activeUrl, setActiveUrl] = useState("");
   const proxyUrl = hlsUrl(videoId);
   const directUrl = hlsDirectUrl(videoId);
-  const webrtcUrl = watchPageUrl(videoId);
+  const webrtcUrl = webrtcPageUrl || watchPageUrl(videoId);
 
   useEffect(() => {
     let cancelled = false;
@@ -55,20 +65,35 @@ export default function BrowserPreview({ videoId, title, apiHlsUrl }: Props) {
       setMessage("Yayın başlatılıyor (normal hız, -re)…");
 
       try {
-        await startStream(videoId);
+        const started = await startStream(videoId);
         if (cancelled) return;
 
-        for (let i = 0; i < 90 && !cancelled; i++) {
+        let ready = Boolean(started.ready);
+        for (let i = 0; i < 120 && !cancelled && !ready; i++) {
           const st = await fetchVideoStatus(videoId);
-          if (st.ready) break;
-          setMessage(`FFmpeg bekleniyor… (${i + 1}/90)`);
+          ready = st.ready;
+          if (ready) break;
+          setMessage(`FFmpeg / yayın bekleniyor… (${i + 1}/120)`);
           await sleep(1000);
         }
 
         if (cancelled) return;
 
-        await sleep(3000);
+        if (!ready) {
+          const dbg = await fetchStreamDebug(videoId).catch(() => null);
+          setError(
+            "Media Server yayını hazır değil (ready=false). İzleme listesinde " +
+              "Yeniden başlat veya: curl -X POST .../restart-all. " +
+              (dbg
+                ? `Teşhis: path=${dbg.path_configured}, HLS panel=${dbg.hls_manifest_ok.via_panel_3000}`
+                : ""),
+          );
+          return;
+        }
 
+        await sleep(2000);
+
+        // Önce doğrudan 8888 (302 redirect); panel /hls/ proxy_redirect ile
         const candidates = [apiHlsUrl, directUrl, proxyUrl].filter(
           Boolean,
         ) as string[];
@@ -77,9 +102,15 @@ export default function BrowserPreview({ videoId, title, apiHlsUrl }: Props) {
         if (cancelled) return;
 
         if (!okUrl) {
+          const dbg = await fetchStreamDebug(videoId).catch(() => null);
           setError(
-            "HLS açılamadı. Önce Yeniden baslat, sonra tekrar dene. Test: curl -sI " +
-              directUrl,
+            "HLS manifest yok. Portlar: panel 3000, HLS 8888, WebRTC 8889. " +
+              "curl -s " +
+              proxyUrl +
+              " | head. " +
+              (dbg
+                ? `ready=${dbg.mediaserver.ready}, 8888=${dbg.hls_manifest_ok.direct_8888}`
+                : "Önce Yeniden başlat."),
           );
           return;
         }
@@ -176,10 +207,13 @@ export default function BrowserPreview({ videoId, title, apiHlsUrl }: Props) {
       <p className="help">
         ID: <code>{videoId}</code>
         <br />
-        HLS (önerilen): <code>{apiHlsUrl || directUrl}</code>
+        HLS panel (önerilen, port 3000): <code>{proxyUrl}</code>
         <br />
-        WebRTC hızlı oynuyorsa yayındaki <strong>-re</strong> eksikti; Yeniden
-        baslat gerekir.
+        HLS doğrudan (8888): <code>{apiHlsUrl || directUrl}</code>
+        <br />
+        WebRTC: <code>{webrtcUrl}</code> — panel adresi ile aynı IP kullanın (
+        <code>.env</code> içindeki <code>MEDIASERVER_PUBLIC_HOST</code>). Sorun
+        olursa önce <strong>Yeniden başlat</strong>, gerekirse HLS kullanın.
       </p>
 
       <details style={{ marginTop: "0.75rem" }}>

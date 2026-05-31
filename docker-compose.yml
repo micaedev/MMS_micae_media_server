@@ -7,6 +7,7 @@ services:
     network_mode: host
     environment:
       MEDIASERVER_PUBLIC_HOST: ${MEDIASERVER_PUBLIC_HOST:-127.0.0.1}
+      WEBRTC_EXTRA_HOSTS: ${WEBRTC_EXTRA_HOSTS:-127.0.0.1,localhost}
     volumes:
       - ./data/videos:/videos
       - /media:/host/media:rw
@@ -30,6 +31,7 @@ services:
       MEDIASERVER_RTSP_URL: rtsp://host.docker.internal:8554
       VIDEOS_DIR: /videos
       PUBLIC_HOST: ${MEDIASERVER_PUBLIC_HOST:-127.0.0.1}
+      MEDIASERVER_WEBRTC_SAFE: ${MEDIASERVER_WEBRTC_SAFE:-0}
       WEBRTC_PORT: "8889"
       HLS_PORT: "8888"
       HLS_BASE_URL: http://host.docker.internal:8888

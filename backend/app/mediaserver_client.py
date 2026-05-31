@@ -1,5 +1,7 @@
 import asyncio
 import logging
+import os
+import shlex
 import time
 from pathlib import Path
 
@@ -23,10 +25,16 @@ class MediaServerClient:
     def _build_publish_command(self, file_path: str) -> str:
         ext = Path(file_path).suffix.lower()
         # -re = normal hız (aksi halde WebRTC/HLS çok hızlı ve bozuk oynar)
-        if ext == ".webm":
+        # libx264 baseline = tarayıcı WebRTC ile uyumlu (copy bazı MP4'lerde patlar)
+        use_safe = os.getenv("MEDIASERVER_WEBRTC_SAFE", "0").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        if ext == ".webm" or use_safe:
             video = (
                 "-map 0:v:0 -c:v libx264 -preset veryfast -tune zerolatency "
-                "-profile:v baseline -pix_fmt yuv420p -g 30"
+                "-profile:v baseline -pix_fmt yuv420p -g 30 -keyint_min 30"
             )
         else:
             video = "-map 0:v:0 -c:v copy -bsf:v h264_mp4toannexb"
@@ -36,6 +44,11 @@ class MediaServerClient:
             f"-f rtsp -rtsp_transport tcp "
             f"rtsp://127.0.0.1:$RTSP_PORT/$MTX_PATH"
         )
+
+    def _wrap_run_on_init(self, file_path: str) -> str:
+        """MediaMTX komutu sh olmadan calistirabilir; # ve $MTX degiskenleri icin sh -c."""
+        inner = self._build_publish_command(file_path)
+        return f"/bin/sh -c {shlex.quote(inner)}"
 
     async def _request(
         self,
@@ -102,9 +115,8 @@ class MediaServerClient:
         await self.add_path(path_name, file_path)
 
     async def add_path(self, path_name: str, file_path: str) -> None:
-        cmd = self._build_publish_command(file_path)
         body = {
-            "runOnInit": cmd,
+            "runOnInit": self._wrap_run_on_init(file_path),
             "runOnInitRestart": True,
         }
         response = await self._request(

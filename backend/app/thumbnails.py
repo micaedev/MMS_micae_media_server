@@ -1,61 +1,178 @@
-import asyncio
+"""Ilk kare JPEG onizleme (ffmpeg)."""
+
+from __future__ import annotations
+
 import logging
+import os
+import subprocess
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-THUMB_WIDTH = 192
+THUMBNAILS_DIR = Path(os.getenv("THUMBNAILS_DIR", "/data/thumbnails"))
+THUMB_WIDTH = int(os.getenv("THUMBNAIL_WIDTH", "320"))
 
 
-def thumbnail_path_for(video_file: Path) -> Path:
-    return video_file.with_suffix(".jpg")
+def ensure_dir() -> None:
+    THUMBNAILS_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(THUMBNAILS_DIR, 0o777)
+    except OSError:
+        pass
 
 
-async def generate_thumbnail(video_file: Path, thumb_file: Path | None = None) -> bool:
-    """Videonun ilk karesini JPEG olarak yazar. Başarılıysa True."""
-    if not video_file.is_file():
-        return False
-    out = thumb_file or thumbnail_path_for(video_file)
-    out.parent.mkdir(parents=True, exist_ok=True)
+def thumbnail_path(video_id: str) -> Path:
+    return THUMBNAILS_DIR / f"{video_id}.jpg"
 
-    cmd = [
-        "ffmpeg",
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-y",
-        "-i",
-        str(video_file),
-        "-frames:v",
-        "1",
-        "-q:v",
-        "4",
-        "-vf",
-        f"scale={THUMB_WIDTH}:-1",
-        str(out),
-    ]
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.PIPE,
+
+def has_thumbnail(video_id: str) -> bool:
+    path = thumbnail_path(video_id)
+    return path.is_file() and path.stat().st_size > 0
+
+
+def delete_thumbnail(video_id: str) -> None:
+    thumbnail_path(video_id).unlink(missing_ok=True)
+
+
+def _run_ffmpeg(args: list[str], timeout: int = 120) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        args,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
     )
-    _, stderr = await proc.communicate()
-    if proc.returncode != 0:
-        logger.warning(
-            "Thumbnail üretilemedi %s: %s",
-            video_file,
-            stderr.decode(errors="replace")[:300],
-        )
+
+
+def generate_thumbnail(video_path: Path, video_id: str, *, force: bool = False) -> bool:
+    """Videonun ilk uygun karesini JPEG olarak yazar."""
+    if not video_path.is_file():
+        logger.warning("thumbnail: dosya yok %s", video_path)
         return False
-    if out.is_file() and out.stat().st_size > 0:
+
+    dest = thumbnail_path(video_id)
+    if not force and has_thumbnail(video_id):
         return True
+
+    ensure_dir()
+    tmp = dest.parent / f"{dest.name}.part"
+    tmp.unlink(missing_ok=True)
+
+    w = THUMB_WIDTH
+    src = str(video_path)
+    # Bazi guvenlik kamerasi MP4'lerinde ilk kare decode edilemez; sirayla dene.
+    attempts: list[list[str]] = [
+        [
+            "ffmpeg",
+            "-y",
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            src,
+            "-an",
+            "-sn",
+            "-dn",
+            "-vf",
+            f"scale={w}:-1",
+            "-frames:v",
+            "1",
+            "-f",
+            "image2",
+            "-q:v",
+            "4",
+            str(tmp),
+        ],
+        [
+            "ffmpeg",
+            "-y",
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-ss",
+            "1",
+            "-i",
+            src,
+            "-an",
+            "-vf",
+            f"scale={w}:-1",
+            "-frames:v",
+            "1",
+            "-f",
+            "image2",
+            "-q:v",
+            "4",
+            str(tmp),
+        ],
+        [
+            "ffmpeg",
+            "-y",
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            src,
+            "-an",
+            "-vf",
+            f"thumbnail,scale={w}:-1",
+            "-frames:v",
+            "1",
+            "-f",
+            "image2",
+            "-q:v",
+            "4",
+            str(tmp),
+        ],
+        [
+            "ffmpeg",
+            "-y",
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            src,
+            "-an",
+            "-frames:v",
+            "1",
+            "-f",
+            "image2",
+            "-q:v",
+            "4",
+            str(tmp),
+        ],
+    ]
+
+    last_err = ""
+    for idx, cmd in enumerate(attempts, start=1):
+        tmp.unlink(missing_ok=True)
+        try:
+            proc = _run_ffmpeg(cmd)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            last_err = str(exc)
+            logger.warning("thumbnail deneme %s %s: %s", idx, video_path, exc)
+            continue
+
+        if proc.returncode == 0 and tmp.is_file() and tmp.stat().st_size > 0:
+            tmp.replace(dest)
+            try:
+                os.chmod(dest, 0o644)
+            except OSError:
+                pass
+            logger.info("thumbnail OK %s (deneme %s)", video_id, idx)
+            return True
+
+        last_err = (proc.stderr or proc.stdout or "").strip()
+        logger.warning(
+            "thumbnail deneme %s basarisiz %s: %s",
+            idx,
+            video_path,
+            last_err[:400],
+        )
+
+    tmp.unlink(missing_ok=True)
+    logger.error("thumbnail tum denemeler basarisiz %s: %s", video_path, last_err[:400])
     return False
-
-
-async def ensure_thumbnail(video_file: Path) -> Path | None:
-    thumb = thumbnail_path_for(video_file)
-    if thumb.is_file() and thumb.stat().st_size > 0:
-        return thumb
-    if await generate_thumbnail(video_file, thumb):
-        return thumb
-    return None

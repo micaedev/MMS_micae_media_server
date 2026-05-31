@@ -41,6 +41,9 @@ export type Video = {
   hls_url: string;
   status: string;
   file_exists: boolean;
+  video_codec: string | null;
+  video_fps: number | null;
+  has_audio: boolean | null;
   thumbnail_url: string;
 };
 
@@ -183,6 +186,34 @@ export type StreamStart = {
   tracks: string[];
   hint?: string;
 };
+
+export type StreamDebug = {
+  video_id: string;
+  file_exists: boolean;
+  engine_file: string;
+  path_configured: boolean;
+  mediaserver: {
+    ready?: boolean;
+    exists?: boolean;
+    readers?: unknown[];
+    tracks?: string[];
+    error?: string;
+  };
+  publish_mode: string;
+  ports: Record<string, number>;
+  urls: Record<string, string>;
+  hls_manifest_ok: { direct_8888: boolean; via_panel_3000: boolean };
+  checks: string[];
+};
+
+export async function fetchStreamDebug(id: string): Promise<StreamDebug> {
+  const res = await fetch(`/api/videos/${id}/stream-debug`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(parseApiError(body, "Yayın teşhisi alınamadı"));
+  }
+  return res.json();
+}
 
 export async function fetchVideoStatus(id: string): Promise<{
   ready: boolean;

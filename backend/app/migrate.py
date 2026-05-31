@@ -39,3 +39,14 @@ def run_migrations() -> None:
             )
             conn.commit()
             logger.info("DB: storage_locations tablosu oluşturuldu")
+
+        cols = {c["name"] for c in insp.get_columns("videos")}
+        for col_name, ddl in (
+            ("video_codec", "ALTER TABLE videos ADD COLUMN video_codec VARCHAR(32)"),
+            ("video_fps", "ALTER TABLE videos ADD COLUMN video_fps FLOAT"),
+            ("has_audio", "ALTER TABLE videos ADD COLUMN has_audio BOOLEAN"),
+        ):
+            if col_name not in cols:
+                conn.execute(text(ddl))
+                conn.commit()
+                logger.info("DB: videos.%s eklendi", col_name)
