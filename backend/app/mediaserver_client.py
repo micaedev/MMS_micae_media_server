@@ -23,27 +23,40 @@ class MediaServerClient:
         self.base_url = base_url.rstrip("/")
 
     def _build_publish_command(self, file_path: str) -> str:
+        src = shlex.quote(file_path)
         ext = Path(file_path).suffix.lower()
         # -re = normal hız (aksi halde WebRTC/HLS çok hızlı ve bozuk oynar)
-        # libx264 baseline = tarayıcı WebRTC ile uyumlu (copy bazı MP4'lerde patlar)
         use_safe = os.getenv("MEDIASERVER_WEBRTC_SAFE", "0").strip().lower() in (
             "1",
             "true",
             "yes",
         )
-        if ext == ".webm" or use_safe:
+        head = (
+            f"ffmpeg -hide_banner -loglevel error -re -stream_loop -1 "
+            f"-fflags +genpts -i {src} "
+        )
+        tail = "-f rtsp -rtsp_transport tcp rtsp://127.0.0.1:$RTSP_PORT/$MTX_PATH"
+
+        # WebM (VP8/VP9 ekran kaydı): WebRTC icin H.264 + sabit fps; ses varsa opus
+        if ext == ".webm":
+            return (
+                f"{head}"
+                "-map 0:v:0 "
+                "-vf fps=30,scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p "
+                "-c:v libx264 -preset veryfast -tune zerolatency "
+                "-profile:v baseline -pix_fmt yuv420p -g 30 -keyint_min 30 -r 30 "
+                "-map 0:a:0? -c:a libopus -b:a 96k -ac 2 "
+                f"{tail}"
+            )
+
+        if use_safe:
             video = (
                 "-map 0:v:0 -c:v libx264 -preset veryfast -tune zerolatency "
                 "-profile:v baseline -pix_fmt yuv420p -g 30 -keyint_min 30"
             )
         else:
             video = "-map 0:v:0 -c:v copy -bsf:v h264_mp4toannexb"
-        return (
-            f"ffmpeg -hide_banner -loglevel error -re -stream_loop -1 "
-            f"-fflags +genpts -i {file_path} {video} -an "
-            f"-f rtsp -rtsp_transport tcp "
-            f"rtsp://127.0.0.1:$RTSP_PORT/$MTX_PATH"
-        )
+        return f"{head}{video} -an {tail}"
 
     def _wrap_run_on_init(self, file_path: str) -> str:
         """MediaMTX komutu sh olmadan calistirabilir; # ve $MTX degiskenleri icin sh -c."""

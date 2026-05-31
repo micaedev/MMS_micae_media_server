@@ -4,6 +4,65 @@ Bu dosya her sürümün **ne yapabildiğini** ve **planlanan işleri** tutar. Ye
 
 ---
 
+## v1.05.1 (2026-05-31) — Stabil
+
+**Etiket:** `v1.05.1`  
+**Önceki stabil:** `v1.05`
+
+### Özet
+
+v1.05 üzerine yayın ve izleme düzeltmeleri: **WebM ekran kaydı → WebRTC/HLS**, FFmpeg **`#` hatası** giderildi, **HLS panel proxy** redirect düzeltmesi, **stream-debug** teşhis API’si, medya bilgisi ve önizleme iyileştirmeleri.
+
+### Yayın (FFmpeg / MediaMTX)
+
+- **`runOnInit` artık `/bin/sh -c` ile çalışır** — MediaMTX komutu kabuk olmadan çalıştırdığında `# pub=v6` yorumu ffmpeg’e çıktı dosyası `#` olarak gidiyordu; yayın hiç başlamıyordu (`Error opening output file #`). Tüm komut `shlex.quote` ile sarılıyor.
+- **Dosya yolları `shlex.quote`** — boşluk içeren depolama yollarında (`/host/media/.../Screencast from ....webm`) ffmpeg `-i` kırılmıyor.
+- **`.webm` (VP8/VP9 ekran kaydı) özel pipeline:**
+  - Sabit **30 fps** + `yuv420p` (değişken fps screencast’lerde WebRTC/HLS bozulmasını önler)
+  - **H.264 baseline** (tarayıcı WebRTC uyumu)
+  - Çift çözünürlük: `scale=trunc(iw/2)*2:trunc(ih/2)*2`
+  - Varsa ses: **Opus** (`-map 0:a:0?`) — screencast WebM’de ses korunur
+- **`.mp4` / `.mkv` / `.mov`:** varsayılan `MEDIASERVER_WEBRTC_SAFE=0` → **H.264 copy** + `h264_mp4toannexb` (düşük CPU); `=1` ise libx264 transcode.
+- **API başlangıcında** tüm videolar için path komutları **otomatik `reload_path`** (engine restart sonrası senkron).
+
+### İzleme (HLS / WebRTC / panel)
+
+- **nginx `/hls/` proxy_redirect** — MediaMTX 302 `Location: /PATH/...` artık `/hls/PATH/...` olarak yeniden yazılır; aksi halde panel `index.html` döndürüp M3U8 yerine HTML geliyordu.
+- **Tarayıcı HLS:** manifest isteğinde **redirect takibi** (`res.url`); öncelik sırası: doğrudan **8888**, panel **`/hls/`**.
+- **WebRTC URL:** panel artık API’deki `webrtc_url` kullanır (`MEDIASERVER_PUBLIC_HOST`); `localhost` / LAN IP uyumsuzluğu giderildi.
+- **engine `WEBRTC_EXTRA_HOSTS`** — ICE için `127.0.0.1`, `localhost` ve LAN IP birlikte (`docker-entrypoint.sh`).
+
+### Video kütüphanesi / API
+
+- **Medya sütunu:** `Codec:`, `Ses:`, `fps:` etiketli bilgi (`ffprobe`, SQLite alanları).
+- **JPEG önizleme:** `GET /api/videos/{id}/thumbnail` — ilk kare; yüklemede ve `refresh-media-info` ile üretim.
+- **`POST /api/videos/refresh-media-info`** — probe + thumbnail yenileme.
+- **`GET /api/videos/{id}/stream-debug`** — `ready`, HLS manifest (8888 / panel nginx / engine), portlar, `publish_mode`, hata metinleri.
+- **Migration:** `videos.video_codec`, `video_fps`, `has_audio`.
+
+### Kurulum / UI
+
+- `VideoMediaCell` — önizleme + etiketli medya bilgisi (Kurulum + İzleme tabloları).
+- `StorageLocationSetup` — yükleme hata durumu, gizli kayıt yeri sadeleştirme (v1.05).
+- `BrowserPreview` — `ready` beklerken net hata; stream-debug ipuçları.
+
+### Docker / yapılandırma
+
+- `docker-compose.yml`: `MEDIASERVER_WEBRTC_SAFE`, `WEBRTC_EXTRA_HOSTS`
+- `.env.example`: WebRTC ve transcode notları
+
+### Bilinen sınırlamalar
+
+- **WebRTC** düşük gecikme için uygundur; **HLS önerilir** (8888 veya `http://IP:3000/hls/...`).
+- `stream-debug` içinden `192.168.0.90:3000` erişimi API konteynerinde başarısız olabilir (normal); `via_panel_nginx` (`host.docker.internal:3000`) kullanılır.
+- Çok sayıda eşzamanlı **libx264** yayını (WEBRTC_SAFE=1 veya çok `.webm`) CPU’yu yorar.
+
+### Disk yedeği
+
+`~/Projects/V1.05.1 Stabil/mediaserver-v1.05.1-stabil.tar.gz`
+
+---
+
 ## v1.05 (2026-05-31) — Stabil
 
 **Etiket:** `v1.05`
